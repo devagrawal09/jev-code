@@ -66,7 +66,7 @@ export interface Packet<R = JsonValue> {
   workflow: string;
   runId: string;
   advisory: true;
-  status: "complete" | "incomplete" | "ladder_only" | "budget_exhausted";
+  status: "complete" | "incomplete" | "budget_exhausted";
   coverage: Coverage;
   findings: Finding[];
   parked: Parked[];

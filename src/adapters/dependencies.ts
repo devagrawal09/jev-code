@@ -67,9 +67,9 @@ export function createRunId(workflow: string): string {
 }
 
 /** Every workflow port implemented for a local workspace. */
-export function createWorkflowDependencies(root: string, jev?: JevPort): WorkflowDependencies {
+export function createWorkflowDependencies(root: string, jev: JevPort): WorkflowDependencies {
   return {
-    ...(jev ? { jev } : {}),
+    jev,
     source: createWorkspaceSource(root),
     evidence: createEvidenceParser(),
     redaction: createRedaction(),

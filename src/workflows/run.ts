@@ -24,8 +24,6 @@ export interface RunOptions {
   root: string;
   model?: string;
   dependencies: WorkflowDependencies;
-  /** Skip all Jev calls and return a deterministic ladder-only packet. */
-  offline?: boolean;
   /** Record artifacts through the artifact store. Default true. */
   persist?: boolean;
   budget?: Partial<BudgetLimits>;
@@ -70,10 +68,9 @@ export class Run {
     this.id = dependencies.createRunId(workflow.name);
     const redaction = dependencies.redaction;
     this.executor = new FrameExecutor<EvidenceRef>({
-      port: dependencies.jev ?? null,
+      port: dependencies.jev,
       model: this.model,
       budget: { ...workflow.budget, ...definedOnly(options.budget ?? {}) },
-      offline: Boolean(options.offline),
       ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
       ...(options.retries === undefined ? {} : { retries: options.retries }),
       ...(options.requestTimeoutMs === undefined ? {} : { timeoutMs: options.requestTimeoutMs }),
@@ -183,15 +180,11 @@ export class Run {
     const coverage = this.coverage();
     if (parts.incomplete) coverage.complete = false;
     const jev = this.jevUsage();
-    const unjudgedByJev = coverage.unjudged + coverage.failed > 0;
-    const status: Packet["status"] =
-      (jev.status === "offline" || jev.status === "unavailable") && unjudgedByJev
-        ? "ladder_only"
-        : this.budget.exhausted
-          ? "budget_exhausted"
-          : coverage.complete
-            ? "complete"
-            : "incomplete";
+    const status: Packet["status"] = this.budget.exhausted
+      ? "budget_exhausted"
+      : coverage.complete
+        ? "complete"
+        : "incomplete";
     const limits = [...parts.limits];
     if (this.budget.exhausted) limits.push(`budget exhausted (${this.budget.exhausted})`);
     if (this.unavailable) limits.push(`Jev not called: ${this.unavailable}`);

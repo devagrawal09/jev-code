@@ -1,22 +1,41 @@
-/**
- * Offline smoke test for the built CLI. Creates a temporary git repository, runs every
- * command with --offline (no network, no credentials), and checks exit codes and JSON shape.
- */
-import { execFileSync, spawnSync } from "node:child_process";
+/** Smoke test the built CLI with a deterministic test Jev. No network calls are made. */
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { Readable } from "node:stream";
+import { pathToFileURL } from "node:url";
+import { createFakeAdapter } from "../src/adapters/fake-jev.ts";
 
-const cli = resolve(import.meta.dirname, "../dist/cli.js");
+type RunCli = typeof import("../src/cli.ts").runCli;
+
+const built = (await import(pathToFileURL(resolve(import.meta.dirname, "../dist/cli.js")).href)) as {
+  runCli: RunCli;
+};
 const root = mkdtempSync(join(tmpdir(), "jev-code-smoke-"));
 const git = (...args: string[]) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
 const write = (path: string, text: string) => {
   mkdirSync(join(root, path, ".."), { recursive: true });
   writeFileSync(join(root, path), text);
 };
+const adapter = createFakeAdapter();
 
-const env = { ...process.env };
-delete env.TYPESAFE_API_KEY;
+async function invoke(args: string[], withAdapter = true) {
+  let stdout = "";
+  let stderr = "";
+  const code = await built.runCli(
+    args,
+    {
+      stdout: { write: (text) => (stdout += text) },
+      stderr: { write: (text) => (stderr += text) },
+      stdin: Readable.from([]),
+      cwd: root,
+      env: {},
+    },
+    withAdapter ? { adapter } : {},
+  );
+  return { code, stdout, stderr };
+}
 
 try {
   git("init", "-q", "-b", "main");
@@ -36,7 +55,7 @@ try {
   );
   write(
     "ci.txt",
-    "FAIL test/math.test.js\n  ● adds\n    expect(received).toEqual(expected)\n    Expected: 3\n    Received: 4\n      at Object.<anonymous> (test/math.test.js:3:20)\n",
+    "FAIL test/math.test.js\n  adds\n    Expected: 3\n    Received: 4\n      at test/math.test.js:3:20\n",
   );
   write("criteria.md", "- add returns the sum\n- add handles overflow\n");
   write(
@@ -62,39 +81,32 @@ try {
     }),
   );
 
-  const cases: Array<{ args: string[]; expect: number[]; json?: boolean }> = [
-    { args: ["--help"], expect: [0] },
-    { args: ["review", "--help"], expect: [0] },
-    { args: ["review"], expect: [64] },
-    { args: ["review", "--task", "fix add overflow", "--offline", "--json"], expect: [11], json: true },
-    { args: ["review", "--task", "fix add overflow", "--offline"], expect: [11] },
-    { args: ["failures", "--log", "ci.txt", "--offline", "--json"], expect: [11], json: true },
-    { args: ["find", "where is add implemented", "--offline", "--json"], expect: [11], json: true },
-    {
-      args: ["criteria", "--criteria-file", "criteria.md", "--offline", "--json"],
-      expect: [11],
-      json: true,
-    },
-    { args: ["rules", "--rules", "rules.json", "--offline", "--json"], expect: [11], json: true },
-    {
-      args: ["comments", "--comments", "comments.json", "--offline", "--json"],
-      expect: [11],
-      json: true,
-    },
-    { args: ["ask", "--file", "frame.json", "--offline", "--json"], expect: [11], json: true },
-    { args: ["ask", "--file", "../outside.json", "--offline"], expect: [65] },
-    // No --offline and no key: Jev is unavailable, so the packet is ladder-only.
-    {
-      args: ["review", "--task", "fix add overflow", "--no-persist", "--json"],
-      expect: [11],
-      json: true,
-    },
-  ];
+  const cases: Array<{ args: string[]; expect: number; json?: boolean; adapter?: boolean; error?: RegExp }> =
+    [
+      { args: ["--help"], expect: 0 },
+      { args: ["review", "--help"], expect: 0 },
+      { args: ["review"], expect: 64 },
+      { args: ["review", "--task", "fix add overflow", "--json"], expect: 0, json: true },
+      { args: ["failures", "--log", "ci.txt", "--json"], expect: 0, json: true },
+      { args: ["find", "where is add implemented", "--json"], expect: 0, json: true },
+      { args: ["criteria", "--criteria-file", "criteria.md", "--json"], expect: 0, json: true },
+      { args: ["rules", "--rules", "rules.json", "--json"], expect: 0, json: true },
+      { args: ["comments", "--comments", "comments.json", "--json"], expect: 0, json: true },
+      { args: ["ask", "--file", "frame.json", "--json"], expect: 0, json: true },
+      { args: ["ask", "--file", "../outside.json"], expect: 65 },
+      { args: ["review", "--task", "x", "--offline"], expect: 64 },
+      {
+        args: ["review", "--task", "x"],
+        expect: 64,
+        adapter: false,
+        error: /TYPESAFE_API_KEY is required/,
+      },
+    ];
 
   let failures = 0;
   for (const test of cases) {
-    const result = spawnSync(process.execPath, [cli, ...test.args], { cwd: root, env, encoding: "utf8" });
-    let ok = test.expect.includes(result.status ?? -1);
+    const result = await invoke(test.args, test.adapter !== false);
+    let ok = result.code === test.expect && (!test.error || test.error.test(result.stderr));
     let note = "";
     if (ok && test.json) {
       try {
@@ -115,10 +127,13 @@ try {
       }
     }
     if (!ok) failures++;
-    console.log(`${ok ? "ok  " : "FAIL"} exit=${result.status} jev-code ${test.args.join(" ")}${note}`);
+    console.log(`${ok ? "ok  " : "FAIL"} exit=${result.code} jev-code ${test.args.join(" ")}${note}`);
     if (!ok) console.log(result.stdout.slice(0, 2000), result.stderr.slice(0, 2000));
   }
-  const status = execFileSync("git", ["status", "--porcelain", "--ignored"], { cwd: root, encoding: "utf8" });
+  const status = execFileSync("git", ["status", "--porcelain", "--ignored"], {
+    cwd: root,
+    encoding: "utf8",
+  });
   if (!status.includes(".jev-code/")) {
     failures++;
     console.log("FAIL expected persisted .jev-code/ artifacts to exist and be ignored");

@@ -98,9 +98,7 @@ export function sortFindings(findings: Finding[]): Finding[] {
 
 /** Failures caused by missing capacity or availability are unjudged; bad answers are failed. */
 export function unjudgedOrFailed(reason: FailureReason): "unjudged" | "failed" {
-  return reason === "offline" || reason === "unavailable" || reason === "budget" || reason === "aborted"
-    ? "unjudged"
-    : "failed";
+  return reason === "unavailable" || reason === "budget" || reason === "aborted" ? "unjudged" : "failed";
 }
 
 const STOP_WORDS = new Set([

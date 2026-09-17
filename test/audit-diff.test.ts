@@ -139,7 +139,7 @@ describe("review", () => {
     }
   });
 
-  test("invalid responses make coverage incomplete; offline mode is ladder-only", async () => {
+  test("invalid responses make coverage incomplete", async () => {
     const repo = setup();
     try {
       const broken = fake((name) => (name === "task_relation" ? { type: "score", score: 9 } : undefined));
@@ -147,15 +147,6 @@ describe("review", () => {
       assert.equal(packet.status, "incomplete");
       assert.equal(exitCodeFor(packet), 10);
       assert.ok(packet.coverage.failed > 0);
-
-      const offline = await auditDiff(
-        { task: "Apply discount codes" },
-        options(repo.root, fake(), { offline: true }),
-      );
-      assert.equal(offline.status, "ladder_only");
-      assert.equal(offline.jev.status, "offline");
-      assert.equal(offline.jev.requests, 0);
-      assert.ok(offline.findings.some((finding) => finding.flag === "lockfile_changed"));
     } finally {
       repo.cleanup();
     }

@@ -34,7 +34,7 @@ export interface JevPort {
 /** Transport failure classes a port implementation reports for a thrown error. */
 export type TransportFailure = "auth" | "too_large" | "transient" | "rejected" | "aborted" | "unknown";
 
-export type JevStatus = "used" | "not_needed" | "unavailable" | "offline";
+export type JevStatus = "used" | "not_needed" | "unavailable";
 
 export interface JevUsage {
   status: JevStatus;

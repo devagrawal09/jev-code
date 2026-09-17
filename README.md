@@ -31,8 +31,8 @@ A common agent flow starts with `review`, then uses `failures` when tests or CI 
 1. **Code gathers small pieces of evidence.** jev-code reads your Git diff (or a test log you saved) and splits
    it into small, size-limited pieces, such as one changed block of a file or one failure from a log.
 2. **Exact checks run first.** Plain rules catch things like an added `test.skip`, deleted assertions,
-   deleted test files, and lockfile, CI or config changes. These need no API key and no network.
-3. **Jev answers fixed-choice questions about each piece.** If you have a TypeSafe API key, jev-code asks
+   deleted test files, and lockfile, CI or config changes.
+3. **Jev answers fixed-choice questions about each piece.** Using your required TypeSafe API key, jev-code asks
    [TypeSafe Jev](https://typesafe.ai), a model that answers multiple-choice questions, about one small piece
    at a time. For example: "How closely is this changed block related to the task?" jev-code's own code, not
    the model, turns the answers into flags using fixed thresholds.
@@ -44,7 +44,7 @@ A common agent flow starts with `review`, then uses `failures` when tests or CI 
 > **Release status:** the `jev-code` package on npm is `0.0.1`, a placeholder with no working commands.
 > This README describes `0.1.0`, which is not released yet. Until it is, build from source.
 
-**Requirements:** Node.js 22.18 or newer, `git`, and a Git repository to check. A TypeSafe API key is required for Jev judgments. Without one, only limited local checks run. CI tests on Linux; Windows is untested.
+**Requirements:** Node.js 22.18 or newer, `git`, a Git repository to check, and a TypeSafe API key. CI tests on Linux; Windows is untested.
 
 **Install** (from source, until 0.1.0 is on npm):
 
@@ -58,24 +58,22 @@ node dist/cli.js --help   # use "node /path/to/jev-code/dist/cli.js" wherever th
 
 After 0.1.0 is released: `npm install --global jev-code`.
 
-**API key.** A TypeSafe API key is required for Jev judgments. jev-code reads it only from this environment variable, never from files or flags:
+**API key.** jev-code reads the required key only from this environment variable, never from files or flags:
 
 ```sh
 export TYPESAFE_API_KEY="<your TypeSafe API key>"
 ```
 
-Without the key, jev-code does not call an AI model. It can still collect evidence and run exact local checks, but semantic questions remain unanswered. When model work remains, the report marks coverage incomplete and exits with code `11`. Use `--offline` when you want this limited local-only mode explicitly.
-
 **Example.** An agent was asked to fix a crash. It did, but it also skipped the test and removed an assertion.
 Inside that repository:
 
 ```sh
-jev-code review --task "Fix the crash in parseConfig when raw is null" --offline
+jev-code review --task "Fix the crash in parseConfig when raw is null"
 ```
 
-The report points to the skipped test and removed assertion. Because this example uses `--offline`, it also says that semantic checks were not run and coverage is incomplete.
+The report points to the skipped test and removed assertion. Jev also checks whether each changed block belongs to the task and whether a test expectation became weaker.
 
-Read both `findings` and `notChecked`. An empty findings list is **not** an approval. Without `--offline`, and with an API key, jev-code can also ask Jev whether each changed block belongs to the task and whether a test expectation became weaker.
+Read both `findings` and `notChecked`. An empty findings list is **not** an approval.
 
 ## Start with these commands
 
@@ -114,12 +112,10 @@ Before you say a coding task is done:
 3. Optional: if a test run failed, save its output to a file in the repository and run:
    jev-code failures --log <that file> --json
 4. Read every item in "findings", "parked" and "notChecked". Fix the code, or tell the user why each one is fine.
-5. Exit codes 10, 11 and 12 are normal. No findings does not mean the change is approved. Never say jev-code passed it.
+5. Exit codes 10 and 12 mean the report is incomplete. No findings does not mean the change is approved. Never say jev-code passed it.
 ```
 
 ## Reports and privacy
-
-Use `--offline` to run only exact local checks and make no network requests. If no API key is set, jev-code also stays local and clearly reports that semantic checks were skipped.
 
 Use `--json` when an agent or script will read the report. The most important fields are:
 
@@ -140,12 +136,12 @@ jev-code does not replace tests, type checks, linters, security tools, or human 
 
 ```sh
 npm ci
-npm run check           # lint, typecheck, tests, build, offline smoke test
+npm run check           # lint, typecheck, tests, build, CLI smoke test
 npm run lint            # Biome
 npm run typecheck
 npm test                # uses a fake Jev and makes no network calls
 npm run build
-npm run smoke           # runs the built CLI offline in a temporary Git repository
+npm run smoke           # runs the built CLI with a fake Jev in a temporary Git repository
 npm run check:package   # package manifest and file-list checks used by the release workflow
 ```
 

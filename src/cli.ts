@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { configuredModel, jevFromEnvironment, MODEL_ENV } from "./adapters/config.ts";
 import { createWorkflowDependencies } from "./adapters/dependencies.ts";
 import { GitError, repoRoot } from "./adapters/git.ts";
+import { MissingCredentialError } from "./adapters/jev.ts";
 import { readStdin, readWorkspaceFile } from "./adapters/paths.ts";
 import { safeMessage } from "./adapters/redact.ts";
 import { EXIT, exitCodeFor, renderHuman } from "./cli/output.ts";
@@ -28,7 +29,6 @@ const GLOBAL_OPTIONS = {
   json: { type: "boolean" },
   model: { type: "string" },
   "no-persist": { type: "boolean" },
-  offline: { type: "boolean" },
   repo: { type: "string" },
   concurrency: { type: "string" },
   "max-requests": { type: "string" },
@@ -120,7 +120,6 @@ ${commands}
 Global options:
   --json                    Emit the versioned JSON packet (schema jev-code.packet/v1)
   --model <id>              Jev model (default ${DEFAULT_MODEL}, or ${MODEL_ENV})
-  --offline                 Run built-in checks only; never call Jev
   --no-persist              Do not write .jev-code/runs artifacts
   --repo <dir>              Repository root (default: git top level of the current directory)
   --concurrency <n>         Parallel Jev requests (1-16, default 4)
@@ -130,12 +129,11 @@ Global options:
   -h, --help                Show help (use "jev-code <command> --help" for a command)
   --version                 Print the version
 
-Exit codes: 0 complete · 10 incomplete coverage · 11 Jev not called (built-in checks only) ·
-            12 budget exhausted · 64 usage error · 65 invalid input · 70 internal error
+Exit codes: 0 complete · 10 incomplete coverage · 12 budget exhausted ·
+            64 usage error · 65 invalid input · 70 internal error
 Results are advisory. No command edits your code, runs tests, posts comments, or approves anything.
 Every report lists what was not checked. "No flags" is not an approval.
-TYPESAFE_API_KEY is required for Jev judgments and read from the process environment only.
-Without it, only limited built-in checks run.
+TYPESAFE_API_KEY is required and read from the process environment only.
 `;
 }
 
@@ -187,14 +185,12 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
       );
       return EXIT.ok;
     }
+    const jev = deps.adapter ?? jevFromEnvironment(io.env);
     const root = typeof v.repo === "string" ? await repoRoot(v.repo) : await repoRoot(io.cwd);
-    // Missing credentials leave the port unset, which the run reports as Jev unavailable.
-    const jev = deps.adapter ?? (v.offline ? undefined : jevFromEnvironment(io.env));
     const options: RunOptions = {
       root,
       dependencies: createWorkflowDependencies(root, jev),
       persist: !v["no-persist"],
-      offline: Boolean(v.offline),
       budget: {
         requests: integer(v["max-requests"] as string | undefined, "max-requests", 1, 10_000),
         inputTokens: integer(v["max-input-tokens"] as string | undefined, "max-input-tokens", 1, 50_000_000),
@@ -362,7 +358,9 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
     return exitCodeFor(packet);
   } catch (error) {
     const usage =
-      error instanceof UsageError || (error as { code?: string }).code?.startsWith("ERR_PARSE_ARGS");
+      error instanceof UsageError ||
+      error instanceof MissingCredentialError ||
+      (error as { code?: string }).code?.startsWith("ERR_PARSE_ARGS");
     const input = error instanceof InputError || error instanceof GitError;
     const code = usage ? EXIT.usage : input ? EXIT.input : EXIT.internal;
     const kind = usage ? "usage" : input ? "input" : "internal";

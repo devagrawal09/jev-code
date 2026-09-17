@@ -12,14 +12,7 @@ import type {
 } from "./types.ts";
 import { readEnvelope, ValidationError } from "./validation.ts";
 
-export type FrameFailure =
-  | "offline"
-  | "unavailable"
-  | "budget"
-  | "invalid"
-  | "too_large"
-  | "failed"
-  | "aborted";
+export type FrameFailure = "unavailable" | "budget" | "invalid" | "too_large" | "failed" | "aborted";
 
 export type FrameOutcome<A> =
   | { ok: true; value: A; frameId: string; model: string }
@@ -51,12 +44,9 @@ export interface FrameSink<P = unknown> {
 }
 
 export interface FrameExecutorOptions<P = unknown> {
-  /** Null when no port is configured; frames then fail as unavailable. */
-  port: JevPort | null;
+  port: JevPort;
   model: string;
   budget: BudgetLimits;
-  /** Never call the port; frames fail as offline. */
-  offline?: boolean;
   concurrency?: number;
   /** Retries for transient failures only. */
   retries?: number;
@@ -117,14 +107,7 @@ export class FrameExecutor<P = unknown> {
       EXECUTOR_LIMITS.minTimeoutMs,
       EXECUTOR_LIMITS.maxTimeoutMs,
     );
-    this.port = options.offline ? null : options.port;
-    if (options.offline) {
-      this.status = "offline";
-      this.reason = "offline mode";
-    } else if (!options.port) {
-      this.status = "unavailable";
-      this.reason = "Jev adapter is not configured";
-    }
+    this.port = options.port;
   }
 
   /** Why the port is not being called, or null when it is available. */
@@ -167,9 +150,7 @@ export class FrameExecutor<P = unknown> {
       detail,
       frameId: frame.id,
     });
-    if (!this.port || this.reason) {
-      return fail(this.status === "offline" ? "offline" : "unavailable", this.reason ?? "no port");
-    }
+    if (!this.port || this.reason) return fail("unavailable", this.reason ?? "no port");
     const raw: JevRequest = { state: frame.state, questions: frame.questions, model: this.model };
     const prepared = this.options.prepare?.(raw) ?? { request: raw, changes: 0 };
     this.preparedChanges += prepared.changes;

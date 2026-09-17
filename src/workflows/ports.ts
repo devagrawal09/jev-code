@@ -64,7 +64,7 @@ export interface ArtifactStore {
 }
 
 export interface WorkflowDependencies {
-  jev?: JevPort;
+  jev: JevPort;
   source: WorkspaceSource;
   evidence: EvidenceParser;
   redaction: RedactionPort;

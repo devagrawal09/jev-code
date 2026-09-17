@@ -10,14 +10,7 @@ export function configuredModel(flag: string | undefined, env: NodeJS.ProcessEnv
   return value ? value : undefined;
 }
 
-/**
- * The SDK-backed Jev port when credentials are present in the environment. Missing or unusable
- * credentials yield undefined, which workflows report as Jev being unavailable.
- */
-export function jevFromEnvironment(env: NodeJS.ProcessEnv): JevPort | undefined {
-  try {
-    return createSdkAdapter(env);
-  } catch {
-    return undefined;
-  }
+/** Build the SDK-backed Jev port from the process environment. */
+export function jevFromEnvironment(env: NodeJS.ProcessEnv): JevPort {
+  return createSdkAdapter(env);
 }

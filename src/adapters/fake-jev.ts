@@ -2,7 +2,7 @@ import type { Question } from "../core/questions.ts";
 import type { JevPort, JevRequest } from "../core/types.ts";
 
 /**
- * Deterministic offline Jev port for tests. Answers come from `respond` when it returns a
+ * Deterministic Jev port for tests. Answers come from `respond` when it returns a
  * value for a key; otherwise a neutral valid answer is generated from the question shape.
  */
 export function createFakeAdapter(

@@ -3,7 +3,6 @@ import type { Packet } from "../workflows/types.ts";
 export const EXIT = {
   ok: 0,
   incomplete: 10,
-  ladderOnly: 11,
   budgetExhausted: 12,
   usage: 64,
   input: 65,
@@ -17,8 +16,6 @@ export function exitCodeFor(packet: Packet<unknown>): number {
       return EXIT.ok;
     case "incomplete":
       return EXIT.incomplete;
-    case "ladder_only":
-      return EXIT.ladderOnly;
     case "budget_exhausted":
       return EXIT.budgetExhausted;
   }

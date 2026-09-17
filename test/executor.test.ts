@@ -63,20 +63,6 @@ describe("core frame executor", () => {
     assert.deepEqual(usage.resolvedModels, ["jev-test"]);
   });
 
-  test("offline and unconfigured ports never call anything", async () => {
-    const offline = new FrameExecutor({
-      port: createFakeAdapter(),
-      model: "m",
-      budget: LIMITS,
-      offline: true,
-    });
-    const outcome = await offline.run(frame("x"));
-    assert.equal(!outcome.ok && outcome.reason, "offline");
-    assert.equal(offline.usage().status, "offline");
-    const missing = new FrameExecutor({ port: null, model: "m", budget: LIMITS });
-    assert.equal(missing.unavailableReason, "Jev adapter is not configured");
-  });
-
   test("invalid envelopes are rejected and budget denials reach the sink", async () => {
     const broken: JevPort = { ask: async () => ({ model: "m", answers: {} }) };
     const invalid = new FrameExecutor({ port: broken, model: "m", budget: LIMITS });
@@ -129,10 +115,10 @@ describe("core frame executor", () => {
 });
 
 describe("configuration adapter", () => {
-  test("model flag wins over TYPESAFE_MODEL; missing credentials yield no port", () => {
+  test("model flag wins over TYPESAFE_MODEL; missing credentials fail", () => {
     assert.equal(configuredModel("jev-flag", { TYPESAFE_MODEL: "jev-env" }), "jev-flag");
     assert.equal(configuredModel(undefined, { TYPESAFE_MODEL: " jev-env " }), "jev-env");
     assert.equal(configuredModel(undefined, {}), undefined);
-    assert.equal(jevFromEnvironment({}), undefined);
+    assert.throws(() => jevFromEnvironment({}), /TYPESAFE_API_KEY is required/);
   });
 });

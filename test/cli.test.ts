@@ -66,12 +66,20 @@ describe("cli", () => {
       ]) {
         assert.equal((await cli(r.root, [removed, "--help"])).code, 64, removed);
       }
-      const missing = await cli(r.root, ["review"]);
+      const adapter = fake();
+      const missing = await cli(r.root, ["review"], { adapter });
       assert.equal(missing.code, 64);
       assert.match(missing.stderr, /task is required/);
       assert.equal((await cli(r.root, ["review", "--task", "x", "--bogus"])).code, 64);
-      assert.equal((await cli(r.root, ["review", "--task", "x", "--scope", "everything"])).code, 64);
-      assert.equal((await cli(r.root, ["find", "x", "--top", "-3"])).code, 64);
+      assert.equal(
+        (await cli(r.root, ["review", "--task", "x", "--scope", "everything"], { adapter })).code,
+        64,
+      );
+      assert.equal((await cli(r.root, ["find", "x", "--top", "-3"], { adapter })).code, 64);
+      const noKey = await cli(r.root, ["review", "--task", "x"]);
+      assert.equal(noKey.code, 64);
+      assert.match(noKey.stderr, /TYPESAFE_API_KEY is required/);
+      assert.equal((await cli(r.root, ["review", "--task", "x", "--offline"])).code, 64);
       const commandHelp = await cli(r.root, ["rules", "--help"]);
       assert.equal(commandHelp.code, 0);
       assert.match(commandHelp.stdout, /--rules <path>/);
@@ -134,31 +142,24 @@ describe("cli", () => {
       assert.equal(stdin.code, 0, stdin.stderr);
       assert.equal(JSON.parse(stdin.stdout).summary.logSource, "stdin");
 
-      const escaped = await cli(r.root, ["failures", "--log", "../../etc/passwd", "--json"]);
+      const escaped = await cli(r.root, ["failures", "--log", "../../etc/passwd", "--json"], {
+        adapter,
+      });
       assert.equal(escaped.code, 65);
       assert.equal(JSON.parse(escaped.stdout).error.kind, "input");
-      const secret = await cli(r.root, ["criteria", "--criteria-file", ".env"]);
+      const secret = await cli(r.root, ["criteria", "--criteria-file", ".env"], { adapter });
       assert.equal(secret.code, 65);
 
-      const criteria = await cli(r.root, [
-        "criteria",
-        "--criteria-file",
-        "notes/criteria.md",
-        "--offline",
-        "--no-persist",
-        "--json",
-      ]);
-      assert.equal(criteria.code, 11);
-      const outside = await cli("/", [
-        "review",
-        "--task",
-        "x",
-        "--repo",
+      const criteria = await cli(
         r.root,
-        "--offline",
-        "--no-persist",
-      ]);
-      assert.equal(outside.code, 11);
+        ["criteria", "--criteria-file", "notes/criteria.md", "--no-persist", "--json"],
+        { adapter },
+      );
+      assert.equal(criteria.code, 0);
+      const outside = await cli("/", ["review", "--task", "x", "--repo", r.root, "--no-persist"], {
+        adapter,
+      });
+      assert.equal(outside.code, 0);
     } finally {
       r.cleanup();
     }

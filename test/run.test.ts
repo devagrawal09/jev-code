@@ -17,7 +17,7 @@ const WORKFLOW = {
   budget: { requests: 10, inputTokens: 100_000, wallMs: 60_000 },
 };
 
-function runOptions(root: string, adapter?: JevAdapter, extra: Record<string, unknown> = {}) {
+function runOptions(root: string, adapter: JevAdapter, extra: Record<string, unknown> = {}) {
   return { root, dependencies: createWorkflowDependencies(root, adapter), persist: false, ...extra };
 }
 
@@ -71,7 +71,7 @@ describe("run executor", () => {
     assert.equal(run.jevUsage().failedRequests, 2);
   });
 
-  test("authentication failure stops further calls and yields a ladder-only packet", async () => {
+  test("authentication failure stops further calls and yields an incomplete packet", async () => {
     let calls = 0;
     const adapter: JevAdapter = {
       async ask() {
@@ -87,9 +87,9 @@ describe("run executor", () => {
     }
     assert.equal(calls, 1, "authentication failure must short-circuit later frames");
     const packet = await finish(run);
-    assert.equal(packet.status, "ladder_only");
+    assert.equal(packet.status, "incomplete");
     assert.equal(packet.jev.status, "unavailable");
-    assert.equal(exitCodeFor(packet), 11);
+    assert.equal(exitCodeFor(packet), 10);
   });
 
   test("invalid answers are rejected, not consumed", async () => {
@@ -123,13 +123,6 @@ describe("run executor", () => {
     const run = await Run.start(WORKFLOW, runOptions("/tmp", adapter), {});
     await Promise.all([run.judge(frame("same")), run.judge(frame("same"))]);
     assert.equal(adapter.requests.length, 1);
-  });
-
-  test("missing credentials mean Jev is unavailable, never a crash", async () => {
-    const run = await Run.start(WORKFLOW, runOptions("/tmp"), {});
-    assert.equal(run.unavailable, "Jev adapter is not configured");
-    const outcome = await run.judge(frame("x"));
-    assert.equal(!outcome.ok && outcome.reason, "unavailable");
   });
 
   test("model defaults to jev-1.13.0 and honors explicit overrides", async () => {
