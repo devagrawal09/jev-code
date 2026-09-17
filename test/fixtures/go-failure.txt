@@ -1,0 +1,10 @@
+=== RUN   TestSum
+--- PASS: TestSum (0.00s)
+=== RUN   TestDivide
+    divide_test.go:14: Divide(1, 0) = 0; want error
+--- FAIL: TestDivide (0.00s)
+=== RUN   TestParse
+--- PASS: TestParse (0.00s)
+FAIL
+exit status 1
+FAIL	example.com/calc	0.004s

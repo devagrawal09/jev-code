@@ -1,0 +1,16 @@
+============================= test session starts ==============================
+collected 12 items
+
+tests/test_parser.py ....F.......                                        [100%]
+
+=================================== FAILURES ===================================
+_______________________________ test_parse_dates _______________________________
+
+    def test_parse_dates():
+>       assert parse_date("2024-01-02") == date(2024, 1, 2)
+E       AssertionError: assert datetime.date(2024, 2, 1) == datetime.date(2024, 1, 2)
+
+tests/test_parser.py:18: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_parser.py::test_parse_dates - AssertionError: assert datetime.date(2024, 2, 1) == datetime.date(2024, 1, 2)
+========================= 1 failed, 11 passed in 0.12s =========================

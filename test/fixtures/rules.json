@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "api-key-server-side",
+      "class": "semantic",
+      "text": "Keep TYPESAFE_API_KEY server-side; never place it in prompts, tool state, logs, or client bundles.",
+      "scope": ["src/**"],
+      "source": "AGENTS.md:14",
+      "examples": [
+        {
+          "hunk": "+console.log(`key=${process.env.TYPESAFE_API_KEY}`)",
+          "label": "applicable_and_violated",
+          "rationale": "The key value is written to logs."
+        },
+        {
+          "hunk": "+const client = new TypeSafeClient({ apiKey: process.env.TYPESAFE_API_KEY })",
+          "label": "applicable_and_followed",
+          "rationale": "The key is read server-side and not exposed."
+        },
+        {
+          "hunk": "+export const add = (a, b) => a + b",
+          "label": "not_applicable",
+          "rationale": "Nothing about credentials."
+        }
+      ]
+    },
+    {
+      "id": "no-user-credential-paths",
+      "class": "semantic",
+      "text": "Code must not load credentials from user-specific paths such as a home-directory dotfile.",
+      "scope": ["src/**", "scripts/**"]
+    },
+    {
+      "id": "prettier-format",
+      "class": "deterministic",
+      "text": "Files are formatted with the configured formatter."
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+> app@1.0.0 test
+> jest
+
+PASS src/format.test.ts
+FAIL src/cart.test.ts
+  ● cart › applies discount
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 90
+    Received: 100
+
+      12 |   const cart = createCart();
+      13 |   cart.add({ price: 100 });
+    > 14 |   expect(cart.total({ code: "SAVE10" })).toBe(90);
+         |                                          ^
+      15 | });
+
+      at Object.<anonymous> (src/cart.test.ts:14:42)
+
+PASS src/user.test.ts
+PASS src/api.test.ts
+PASS src/db.test.ts
+PASS src/auth.test.ts
+PASS src/search.test.ts
+PASS src/billing.test.ts
+PASS src/queue.test.ts
+PASS src/mailer.test.ts
+PASS src/cache.test.ts
+PASS src/config.test.ts
+PASS src/router.test.ts
+PASS src/log.test.ts
+PASS src/metrics.test.ts
+PASS src/health.test.ts
+PASS src/i18n.test.ts
+PASS src/uploads.test.ts
+PASS src/webhooks.test.ts
+PASS src/ratelimit.test.ts
+PASS src/session.test.ts
+PASS src/tokens.test.ts
+PASS src/export.test.ts
+PASS src/import.test.ts
+PASS src/reports.test.ts
+FAIL src/net.test.ts
+  ● net › fetches remote config
+
+    FetchError: request to https://config.example.com/app failed, reason: getaddrinfo ENOTFOUND config.example.com
+
+      at ClientRequest.<anonymous> (node_modules/node-fetch/lib/index.js:1491:11)
+
+Test Suites: 2 failed, 25 passed, 27 total
+Tests:       2 failed, 80 passed, 82 total

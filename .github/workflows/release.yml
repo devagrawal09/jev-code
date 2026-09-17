@@ -1,0 +1,99 @@
+name: Release
+
+# Publishes jev-code to npm with trusted publishing (OIDC) when a GitHub Release is published.
+# Setup and failure handling: docs/RELEASING.md. No npm token is used or accepted.
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: verify release
+    if: github.repository == 'devagrawal09/jev-code'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # tags and origin/main, to prove the tag commit is merged
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Verify tag, package identity and checkout
+        run: node scripts/release.ts source --tag "$RELEASE_TAG" --prerelease "$RELEASE_PRERELEASE" --require-release-branch
+      - name: Verify npm CLI supports trusted publishing
+        run: node scripts/release.ts npm-cli
+      - name: Verify version is not on npm
+        run: node scripts/release.ts registry
+      - run: npm ci
+      - run: npm run check
+      - name: Verify checkout is still clean after the build
+        run: node scripts/release.ts source --tag "$RELEASE_TAG" --prerelease "$RELEASE_PRERELEASE" --require-release-branch
+      - name: Pack and verify package contents
+        id: pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/package"
+          node scripts/release.ts pack --out "$RUNNER_TEMP/package"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/package/${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: publish to npm
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Must match the environment in the npm trusted publisher configuration.
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing and provenance
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+      TARBALL: ${{ needs.verify.outputs.tarball }}
+      TARBALL_SHA256: ${{ needs.verify.outputs.sha256 }}
+    steps:
+      # Only the release scripts run in this job: no dependency install, lifecycle scripts or build while the
+      # OIDC token is available. The tarball published is the exact file verified above.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Verify tag, package identity and checkout
+        run: node scripts/release.ts source --tag "$RELEASE_TAG" --prerelease "$RELEASE_PRERELEASE"
+      - name: Verify npm CLI supports trusted publishing
+        run: node scripts/release.ts npm-cli
+      - name: Verify version is not on npm
+        run: node scripts/release.ts registry
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-package
+          path: ${{ runner.temp }}/package
+      - name: Verify tarball is the one built and checked
+        run: node scripts/release.ts tarball --tag "$RELEASE_TAG" --file "$RUNNER_TEMP/package/$TARBALL" --sha256 "$TARBALL_SHA256"
+      - name: Publish
+        run: npm publish "$RUNNER_TEMP/package/$TARBALL" --provenance --access public --ignore-scripts

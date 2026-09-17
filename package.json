@@ -1,0 +1,63 @@
+{
+  "name": "jev-code",
+  "version": "0.1.0",
+  "description": "Pre-review triage for coding-agent changes: flags diff hunks and test changes worth a second look and sorts failing test logs. Advisory only; never approves. Optional TypeSafe Jev with your own key.",
+  "license": "MIT",
+  "author": "Dev Agrawal",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devagrawal09/jev-code.git"
+  },
+  "homepage": "https://github.com/devagrawal09/jev-code#readme",
+  "bugs": {
+    "url": "https://github.com/devagrawal09/jev-code/issues"
+  },
+  "type": "module",
+  "bin": {
+    "jev-code": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "keywords": [
+    "typesafe",
+    "jev",
+    "coding-agents",
+    "ai-agents",
+    "pre-review",
+    "triage",
+    "git-diff",
+    "test-failures",
+    "cli"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "node --test --test-reporter=spec \"test/**/*.test.ts\"",
+    "smoke": "node scripts/smoke-offline.ts",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build && npm run smoke",
+    "check:package": "npm run build && node scripts/release.ts manifest && node scripts/release.ts pack --dry-run"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "0.6.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.3"
+  }
+}
