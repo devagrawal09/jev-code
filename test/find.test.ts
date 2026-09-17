@@ -41,7 +41,7 @@ describe("find", () => {
         const candidate = (request.state as { candidate: { path: string; previouslyShown: string[] } })
           .candidate;
         const retry = candidate.path.includes("webhooks");
-        if (name === "relevance") return fakeScore(4, retry ? 3 : 2, 0.8);
+        if (name === "relevance") return retry ? fakeScore(4, 3, 0.65) : fakeScore(4, 2, 0.95);
         if (name === "relevant_content_cut_off") {
           excerptCalls++;
           return fakeNoul(retry && candidate.previouslyShown.length === 0 ? 0.9 : 0.1);

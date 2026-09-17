@@ -40,7 +40,7 @@ export const FIND = {
 } as const;
 
 export const FIND_POLICY = {
-  version: "find-policy@1",
+  version: "find-policy@2",
   shardSize: 20,
   acceptMetaHighMass: 0.35,
   maxExcerptCandidates: 24,
@@ -59,10 +59,10 @@ export const FIND_POLICY = {
 const ROLES = ["implementation", "caller", "test", "config", "docs", "unrelated", "cannot_tell"] as const;
 const MISSING = ["none", "caller", "callee", "configuration", "tests", "cannot_tell"] as const;
 const RELEVANCE_LEVELS = [
-  "Unrelated to the task.",
-  "Same general area, but unlikely to need reading or changing for this task.",
-  "Likely useful context for the task, e.g. a caller, test, or configuration.",
-  "Likely contains the code the task is about.",
+  "No specific connection to the artifact or behavior requested by the task.",
+  "Shares terminology or a general domain, but relevance is incidental or uncertain.",
+  "Provides supporting evidence, such as a caller, test, adapter, example, or configuration.",
+  "Defines or coordinates the primary artifact or behavior explicitly requested by the task.",
 ] as const;
 
 interface Candidate {
@@ -172,13 +172,21 @@ function metaFrame(task: string, shardItems: readonly Candidate[]) {
   const questions: Record<string, ReturnType<typeof score> | ReturnType<typeof choice>> = {};
   for (const candidate of shardItems) {
     questions[`relevance_${candidate.id}`] = score(
-      `Based only on its metadata, how relevant is candidate ${candidate.id} (${candidate.path}) to the task?`,
+      {
+        question: `Based only on its metadata, how relevant is candidate ${candidate.id} (${candidate.path}) to the task?`,
+        guidance:
+          "Judge relevance to the specific artifact requested, not keyword overlap. Reserve the highest level for metadata that identifies the primary requested artifact or behavior. A suggestive filename cannot establish unseen content.",
+      },
       [...RELEVANCE_LEVELS],
     );
     questions[`role_${candidate.id}`] = choice(
-      `Based only on its metadata, what role would candidate ${candidate.id} (${candidate.path}) play for the task?`,
       {
-        implementation: "Implements behavior the task is about.",
+        question: `Based only on its metadata, what role would candidate ${candidate.id} (${candidate.path}) play for the task?`,
+        guidance:
+          "Classify the candidate's most likely role for the specific request. Do not treat a test, example, demo, or incidental wrapper as the primary implementation unless that is what the task asks to find. Use cannot_tell when metadata does not establish a role.",
+      },
+      {
+        implementation: "Defines or coordinates the primary behavior requested by the task.",
         caller: "Uses or invokes the relevant behavior.",
         test: "Tests the relevant behavior.",
         config: "Configures the relevant behavior.",
@@ -190,7 +198,7 @@ function metaFrame(task: string, shardItems: readonly Candidate[]) {
   }
   const keys = Object.keys(questions);
   return buildFrame<Map<string, MetaAnswer>>({
-    template: "candidate_meta@1",
+    template: "candidate_meta@2",
     scope: stableId(
       "shard",
       shardItems.map((item) => item.id),
@@ -266,14 +274,20 @@ async function readExcerpt(
 
 function excerptFrame(task: string, candidate: Candidate, excerpt: Excerpt, priorRanges: string[]) {
   const questions = {
-    relevance: score(`How relevant is the shown excerpt of ${candidate.path} to the task?`, [
-      ...RELEVANCE_LEVELS,
-    ]),
-    target_definition_visible: noul(
-      `Does the shown excerpt of ${candidate.path} contain the definition of the code the task is about?`,
+    relevance: score(
       {
-        true: "The relevant function, class, handler, or configuration is defined in the shown lines.",
-        false: "The shown lines do not contain that definition.",
+        question: `How relevant is the shown excerpt of ${candidate.path} to the task?`,
+        guidance:
+          "Score the excerpt's centrality to the specific request, not mere mentions or shared terminology. When implementation is requested, callers, tests, examples, and adapters are supporting evidence rather than the primary artifact. Do not infer code outside the shown lines.",
+      },
+      [...RELEVANCE_LEVELS],
+    ),
+    target_definition_visible: noul(
+      `Does the shown excerpt of ${candidate.path} define or coordinate the primary artifact or behavior requested by the task?`,
+      {
+        true: "The primary requested function, class, handler, configuration, or equivalent behavior is defined in the shown lines.",
+        false:
+          "The shown lines only mention, call, test, demonstrate, or otherwise support the primary requested artifact.",
       },
     ),
     relevant_content_cut_off: noul(
@@ -283,14 +297,21 @@ function excerptFrame(task: string, candidate: Candidate, excerpt: Excerpt, prio
         false: "The relevant content, if any, is fully shown.",
       },
     ),
-    missing_evidence: choice(`What evidence outside this excerpt is most needed for the task?`, {
-      none: "Nothing further is needed from outside this excerpt.",
-      caller: "Code that calls the shown code.",
-      callee: "Code the shown code calls or imports.",
-      configuration: "Configuration that controls the shown code.",
-      tests: "Tests that exercise the shown code.",
-      cannot_tell: "Unclear what is missing.",
-    }),
+    missing_evidence: choice(
+      {
+        question: "What evidence outside this excerpt is most needed for the task?",
+        guidance:
+          "Choose outside evidence only when it is necessary to establish this candidate's relevance or answer the task, not merely because related code exists. Choose none when the excerpt already establishes the candidate's role.",
+      },
+      {
+        none: "The excerpt already establishes this candidate's role for the task.",
+        caller: "A caller is necessary to establish how the shown code participates in the task.",
+        callee: "A callee or import is necessary to establish what the shown code actually does.",
+        configuration: "Controlling configuration is necessary to establish the relevant behavior.",
+        tests: "Tests are necessary to establish the relevant behavior or contract.",
+        cannot_tell: "Unclear what evidence would settle the candidate's role.",
+      },
+    ),
     untrusted_instruction_text: untrustedInstructionQuestion(),
   };
   const keys = Object.keys(questions);
@@ -304,7 +325,7 @@ function excerptFrame(task: string, candidate: Candidate, excerpt: Excerpt, prio
     truncated: excerpt.startLine > 1 || excerpt.endLine < excerpt.totalLines,
   };
   return buildFrame<ExcerptAnswer>({
-    template: "candidate_excerpt@1",
+    template: "candidate_excerpt@2",
     scope: candidate.id,
     state: {
       evidencePolicy: EVIDENCE_POLICY,
@@ -435,6 +456,7 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
     )
     .sort(
       (a, b) =>
+        results.get(b.id)!.metadata!.expected - results.get(a.id)!.metadata!.expected ||
         results.get(b.id)!.metadata!.highMass - results.get(a.id)!.metadata!.highMass ||
         a.path.localeCompare(b.path),
     );
@@ -545,9 +567,9 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
     .filter((result) => result.relevance !== null && result.disposition !== "parked")
     .sort(
       (a, b) =>
-        b.relevance! - a.relevance! ||
         (b.excerpt?.expected ?? b.metadata?.expected ?? 0) -
           (a.excerpt?.expected ?? a.metadata?.expected ?? 0) ||
+        b.relevance! - a.relevance! ||
         Number(b.excerpt !== null) - Number(a.excerpt !== null) ||
         a.path.localeCompare(b.path),
     );

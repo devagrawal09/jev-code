@@ -30,7 +30,7 @@ export interface FailuresSectionInput {
 }
 
 export const TRIAGE_FAILURES_POLICY = {
-  version: "triage-failures-policy@1",
+  version: "triage-failures-policy@2",
   defaultMaxItems: 40,
   decisive: 0.6,
   causedConflict: 0.6,
@@ -121,6 +121,11 @@ const RELATION_EXAMPLES = [
     diff: "src/cart.ts and src/api.ts changed",
     answer: "cannot_tell",
   },
+  {
+    failure: "worker test failed: process exited with code 1 at src/runner.ts:42",
+    diff: "src/runner.ts changed to add a new execution mode",
+    answer: "cannot_tell",
+  },
 ];
 
 function relationFrame(
@@ -138,15 +143,18 @@ function relationFrame(
             {
               question: `How does failure ${block.id} relate to the changes in the diff summary?`,
               guidance:
-                "Use only the failure evidence and diff summary shown. Choose cannot_tell when they do not settle it.",
+                "Choose the best-supported relation, not one that is merely possible. caused_by_diff requires a concrete bridge from a changed path, symbol, or behavior to the shown failure mechanism. A generic exit code, temporal proximity, shared task vocabulary, or path overlap alone is insufficient. Choose cannot_tell when multiple relations remain viable; lack of overlap alone does not prove unrelated_to_diff.",
               workedExamples: RELATION_EXAMPLES,
             },
             {
-              caused_by_diff: "The failing behavior plausibly comes from code the diff changed.",
-              unrelated_to_diff: "The failure concerns code or behavior the diff did not touch.",
+              caused_by_diff:
+                "Shown evidence supports a concrete causal chain from changed code or behavior to this failure.",
+              unrelated_to_diff:
+                "Shown evidence positively ties the failure to unchanged behavior independent of the diff.",
               environment_or_infrastructure:
-                "The failure comes from network, resources, tooling, or setup rather than code.",
-              cannot_tell: "The shown evidence does not settle the relation.",
+                "Shown evidence identifies network, resources, tooling, or setup as the failure mechanism.",
+              cannot_tell:
+                "The shown evidence is generic, incomplete, or compatible with more than one relation.",
             },
           ),
         }
@@ -179,7 +187,7 @@ function relationFrame(
   };
   const keys = Object.keys(questions);
   return buildFrame<RelationAnswers>({
-    template: "failure_relation@1",
+    template: "failure_relation@2",
     scope: block.id,
     state: {
       evidencePolicy: EVIDENCE_POLICY,

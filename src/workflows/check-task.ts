@@ -22,7 +22,7 @@ export interface TaskSectionInput {
 }
 
 export const CHECK_TASK_POLICY = {
-  version: "check-task-policy@1",
+  version: "check-task-policy@2",
   defaultMaxHunks: 150,
   weakLowMass: 0.7,
   weakens: 0.7,
@@ -133,13 +133,14 @@ function intentFrame(
     task_relation: score(
       {
         question: `How does diff hunk ${hunk.id} relate to the stated task?`,
-        guidance: "Judge only what the shown hunk and manifest support.",
+        guidance:
+          "Judge the hunk's contribution to a coherent implementation, not whether it implements the main behavior alone. Documentation counts, exports, registrations, imports, fixtures, configuration, and renamed references can support behavior added elsewhere in the manifest. Do not infer a relationship from directory proximity or shared terminology alone.",
       },
       [
         "No connection to the task is visible in this hunk.",
         "Same area of code, but the task does not need this change.",
-        "Supports the task indirectly, e.g. a rename, helper, or import used by another listed hunk.",
-        "Directly implements or tests the behavior the task asks for.",
+        "Supports the task indirectly or keeps the repository consistent with task behavior implemented elsewhere.",
+        "Directly implements or verifies the primary behavior the task asks for.",
       ],
     ),
     change_kind: choice(`What kind of change is hunk ${hunk.id}?`, {
@@ -166,7 +167,7 @@ function intentFrame(
   };
   const keys = Object.keys(questions);
   return buildFrame<IntentAnswers>({
-    template: "hunk_intent@1",
+    template: "hunk_intent@2",
     scope: hunk.id,
     state: {
       evidencePolicy: EVIDENCE_POLICY,
@@ -205,10 +206,14 @@ function testFrame(task: JsonObject, hunk: Hunk, ref: EvidenceRef) {
       },
     ),
     expectation_change_stated_in_task: noul(
-      `Does the task text explicitly call for the expectation change made in hunk ${hunk.id}?`,
       {
-        true: "The task names the behavior or value whose expectation changes.",
-        false: "The task does not call for this change.",
+        question: `Does the requested behavior require or clearly entail that the old expectation in hunk ${hunk.id} should no longer hold?`,
+        guidance:
+          "Choose true only when the old expected behavior conflicts with the requested change. The task need not quote the assertion, but broad topical overlap is insufficient.",
+      },
+      {
+        true: "The old expectation contradicts behavior required or clearly entailed by the task.",
+        false: "The task remains compatible with the old expectation or does not justify removing it.",
       },
     ),
     disables_or_bypasses_test: noul(`Does hunk ${hunk.id} disable, skip, or short-circuit a test?`, {
@@ -218,7 +223,7 @@ function testFrame(task: JsonObject, hunk: Hunk, ref: EvidenceRef) {
   };
   const keys = Object.keys(questions);
   return buildFrame<TestAnswers>({
-    template: "test_expectation@1",
+    template: "test_expectation@2",
     scope: hunk.id,
     state: { evidencePolicy: EVIDENCE_POLICY, task, hunk: hunkEvidence(hunk) },
     questions,
