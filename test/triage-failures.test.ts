@@ -35,7 +35,7 @@ function setup() {
   return repo;
 }
 
-describe("triage-failures", () => {
+describe("failures", () => {
   test("classifies failures, runs one allowlisted probe, and parks ladder conflicts", async () => {
     const repo = setup();
     try {

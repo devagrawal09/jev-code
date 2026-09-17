@@ -39,7 +39,7 @@ try {
 
   const result = spawnSync(
     process.execPath,
-    [cli, "flag-diff", "--task", "Give members a 10% discount", "--json", "--no-persist"],
+    [cli, "review", "--task", "Give members a 10% discount", "--json", "--no-persist"],
     {
       cwd: root,
       env: process.env,

@@ -24,7 +24,7 @@ function candidatesIn(request: JevRequest) {
   return (request.state as { candidates?: Array<{ id: string; path: string }> }).candidates ?? [];
 }
 
-describe("locate", () => {
+describe("find", () => {
   test("screens every candidate by metadata, reads excerpts only for accepted ones, and ranks them", async () => {
     const repo = setup();
     try {

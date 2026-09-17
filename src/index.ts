@@ -17,7 +17,7 @@ export { redactJson, redactText } from "./adapters/redact.ts";
 export { parseTestRecords } from "./adapters/test-records.ts";
 // cli: dispatch registry and output formatting
 export { EXIT, exitCodeFor, renderHuman } from "./cli/output.ts";
-export { type Stability, WORKFLOWS, type WorkflowDefinition, type WorkflowName } from "./cli/registry.ts";
+export { WORKFLOWS, type WorkflowDefinition, type WorkflowName } from "./cli/registry.ts";
 // core: generic frames, questions, validation, budgets, batching, and execution
 export { mapPool, shard, withSplitting } from "./core/batch.ts";
 export { Budget, type BudgetDenial, type BudgetLimits, estimateTokens } from "./core/budget.ts";

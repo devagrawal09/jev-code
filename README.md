@@ -12,26 +12,19 @@ Each command gathers the right evidence, asks a fixed set of bounded questions, 
 
 ## What agents can delegate
 
-| Command | Status | Delegated task |
-| --- | --- | --- |
-| `flag-diff` | Stable | Check whether changed code belongs to the task and whether tests became weaker. |
-| `triage-failures` | Stable | Pull useful failures from a test or CI log and relate them to the current change. |
-| `flag-rules` | Preview | Check changed code against semantic repository rules written by a human. |
-| `map-criteria` | Preview | Connect acceptance criteria to implementation and test evidence. |
-| `triage-comments` | Experimental | Decide which supplied review comments are still actionable, already handled, stale, or unclear. |
-| `locate` | Experimental | Produce a shortlist of files that may matter for a task. |
-| `run-frame` | Advanced | Run one custom, validated Jev request when no built-in workflow fits. |
+| Command | What it does |
+| --- | --- |
+| `review` | Find changes that may not match the task or may weaken tests. |
+| `failures` | Sort test failures and show which may come from the current changes. |
+| `rules` | Find changes that may break project rules. |
+| `criteria` | Show which task requirements have code or test evidence. |
+| `comments` | Show which review comments still need attention. |
+| `find` | Find files that may be relevant to a task. |
+| `ask` | Ask Jev your own yes/no, multiple-choice, or scoring questions. |
 
-### What the statuses mean
+> **Experimental:** jev-code is a new product. Every command, report, and interface may change.
 
-- **Stable:** ready for normal agent use. The command and report format are part of the supported 0.1 interface.
-- **Preview:** implemented and tested, but the questions, thresholds, or report details may change as people use it.
-- **Experimental:** available to try, but its value and interface are still being evaluated. It may change substantially or be removed.
-- **Advanced:** a lower-level escape hatch for custom use. This is about intended audience, not maturity.
-
-Only `flag-diff` and `triage-failures` are stable because they cover frequent tasks with clear inputs and useful, bounded outputs. The other workflows depend more on repository-specific rules, criteria, comments, or search behavior, so jev-code does not promise their current interface yet. A status describes how much you can rely on the interface, not whether a result is correct: every report is advisory.
-
-Start with `flag-diff` and `triage-failures`.
+A common agent flow starts with `review`, then uses `failures` when tests or CI fail. The other commands handle more focused jobs.
 
 ## How delegation works
 
@@ -48,7 +41,7 @@ Start with `flag-diff` and `triage-failures`.
 
 ## Get started
 
-> **Release status:** the `jev-code` package on npm is `0.0.1`, an early preview with no working commands.
+> **Release status:** the `jev-code` package on npm is `0.0.1`, a placeholder with no working commands.
 > This README describes `0.1.0`, which is not released yet. Until it is, build from source.
 
 **Requirements:** Node.js 22.18 or newer, `git`, and a Git repository to check. A TypeSafe API key is
@@ -76,7 +69,7 @@ export TYPESAFE_API_KEY="<your TypeSafe API key>"
 Inside that repository:
 
 ```sh
-jev-code flag-diff --task "Fix the crash in parseConfig when raw is null" --offline
+jev-code review --task "Fix the crash in parseConfig when raw is null" --offline
 ```
 
 The report points to the skipped test and removed assertion. Because this example uses `--offline`, it also says that semantic checks were not run and coverage is incomplete.
@@ -85,24 +78,24 @@ Read both `findings` and `notChecked`. An empty findings list is **not** an appr
 
 ## Start with these commands
 
-**`flag-diff`** compares a diff with the task text and flags changed blocks that look unrelated to the task,
+**`review`** compares a diff with the task text and flags changed blocks that look unrelated to the task,
 tests that were weakened, and unexpected lockfile, CI or config edits.
 
 ```sh
-jev-code flag-diff --task "Fix the crash in parseConfig when raw is null"   # uncommitted changes vs HEAD
-jev-code flag-diff --task-file task.md --task-source user --scope staged    # only staged changes
-jev-code flag-diff --task-file task.md --scope branch --base main           # a whole branch vs main
+jev-code review --task "Fix the crash in parseConfig when raw is null"   # uncommitted changes vs HEAD
+jev-code review --task-file task.md --task-source user --scope staged    # only staged changes
+jev-code review --task-file task.md --scope branch --base main           # a whole branch vs main
 ```
 
 Give it the task as the person wrote it, not the agent's summary of what it did.
 
-**`triage-failures`** splits a saved test or CI log into separate failures, groups duplicates, and sorts each
+**`failures`** splits a saved test or CI log into separate failures, groups duplicates, and sorts each
 one against the diff, for example as related to the change, or as an environment or network problem. It
 also says what rerun would settle the question. It does not run or rerun anything.
 
 ```sh
-jev-code triage-failures --log test-output.log
-npm test 2>&1 | jev-code triage-failures --log -
+jev-code failures --log test-output.log
+npm test 2>&1 | jev-code failures --log -
 ```
 
 Files passed with `--task-file` or `--log` must be inside the repository. Run `jev-code <command> --help` for
@@ -116,9 +109,9 @@ jev-code is a CLI with a JSON output. It ships no agent plugin or hook. Copy thi
 ```text
 Before you say a coding task is done:
 1. Run the project's normal tests, type checks and linters yourself. jev-code does not run them.
-2. Run: jev-code flag-diff --task "<the user's original task, word for word>" --task-source user --json
+2. Run: jev-code review --task "<the user's original task, word for word>" --task-source user --json
 3. Optional: if a test run failed, save its output to a file in the repository and run:
-   jev-code triage-failures --log <that file> --json
+   jev-code failures --log <that file> --json
 4. Read every item in "findings", "parked" and "notChecked". Fix the code, or tell the user why each one is fine.
 5. Exit codes 10, 11 and 12 are normal. No findings does not mean the change is approved. Never say jev-code passed it.
 ```

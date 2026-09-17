@@ -10,7 +10,7 @@ import { buildFrame, Run, type RunOptions } from "./run.ts";
 import type { Packet } from "./types.ts";
 
 export const RUN_FRAME = {
-  name: "run-frame",
+  name: "ask",
   version: 1,
   budget: { requests: 3, inputTokens: 40_000, wallMs: 60_000 },
 } as const;
@@ -198,7 +198,7 @@ export async function runFrame(
     state: { evidencePolicy: EVIDENCE_POLICY, evidence: frameFile.state },
     questions: frameFile.questions,
     provenance: [
-      { kind: "file_range", id: file.path, path: file.path, probe: "run-frame-file@1", truncated: false },
+      { kind: "file_range", id: file.path, path: file.path, probe: "ask-file@1", truncated: false },
     ],
     parse(answers) {
       expectKeys(answers, names);
@@ -218,7 +218,7 @@ export async function runFrame(
   const limits: string[] = [];
   if (reasked > 0) {
     limits.push(
-      `${reasked} earlier run-frame run(s) asked different questions over identical state (possible judge shopping)`,
+      `${reasked} earlier ask run(s) asked different questions over identical state (possible judge shopping)`,
     );
   }
   if (outcome.ok) {

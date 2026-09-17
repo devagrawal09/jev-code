@@ -8,7 +8,7 @@ import { GitError, repoRoot } from "./adapters/git.ts";
 import { readStdin, readWorkspaceFile } from "./adapters/paths.ts";
 import { safeMessage } from "./adapters/redact.ts";
 import { EXIT, exitCodeFor, renderHuman } from "./cli/output.ts";
-import { type Stability, WORKFLOWS, type WorkflowDefinition, type WorkflowName } from "./cli/registry.ts";
+import { WORKFLOWS, type WorkflowDefinition, type WorkflowName } from "./cli/registry.ts";
 import type { JevPort } from "./core/types.ts";
 import { InputError } from "./workflows/errors.ts";
 import type { RunOptions } from "./workflows/run.ts";
@@ -41,64 +41,55 @@ const DIFF_OPTIONS = { scope: { type: "string" }, base: { type: "string" } } as 
 const TASK_OPTIONS = { task: { type: "string" }, "task-file": { type: "string" } } as const;
 
 const COMMAND_OPTIONS = {
-  "flag-diff": {
+  review: {
     ...TASK_OPTIONS,
     ...DIFF_OPTIONS,
     "task-source": { type: "string" },
     "max-hunks": { type: "string" },
   },
-  "triage-failures": {
+  failures: {
     ...TASK_OPTIONS,
     ...DIFF_OPTIONS,
     log: { type: "string" },
     "no-diff": { type: "boolean" },
     "max-failures": { type: "string" },
   },
-  "flag-rules": { ...DIFF_OPTIONS, rules: { type: "string" }, "max-pairs": { type: "string" } },
-  "map-criteria": {
+  rules: { ...DIFF_OPTIONS, rules: { type: "string" }, "max-pairs": { type: "string" } },
+  criteria: {
     ...DIFF_OPTIONS,
     criteria: { type: "string" },
     "criteria-file": { type: "string" },
     "test-results": { type: "string" },
     "max-evidence": { type: "string" },
   },
-  "triage-comments": {
+  comments: {
     ...DIFF_OPTIONS,
     comments: { type: "string" },
     "no-diff": { type: "boolean" },
     "max-comments": { type: "string" },
   },
-  locate: {
+  find: {
     ...TASK_OPTIONS,
     paths: { type: "string", multiple: true },
     top: { type: "string" },
     excerpts: { type: "boolean" },
     "max-files": { type: "string" },
   },
-  "run-frame": { file: { type: "string" } },
+  ask: { file: { type: "string" } },
 } as const;
 
 const COMMAND_USAGE: Record<WorkflowName, string> = {
-  "flag-diff":
-    "jev-code flag-diff --task <text> | --task-file <path> [--task-source user|issue|agent] [--scope worktree|staged|branch] [--base <ref>] [--max-hunks N]",
-  "triage-failures":
-    "jev-code triage-failures --log <path|-> [--task <text> | --task-file <path>] [--scope ...] [--base <ref>] [--no-diff] [--max-failures N]",
-  "flag-rules": "jev-code flag-rules --rules <path> [--scope ...] [--base <ref>] [--max-pairs N]",
-  "map-criteria":
-    "jev-code map-criteria --criteria <text> | --criteria-file <path|-> [--test-results <json|junit path>] [--scope ...] [--base <ref>] [--max-evidence N]",
-  "triage-comments":
-    "jev-code triage-comments --comments <path|-> [--scope ...] [--base <ref>] [--no-diff] [--max-comments N]",
-  locate:
-    'jev-code locate "<task>" | --task <text> | --task-file <path> [--paths <glob>]... [--top N] [--excerpts] [--max-files N]',
-  "run-frame": "jev-code run-frame --file <workspace-relative frame.json>",
-};
-
-const STABILITY_NOTE: Record<Stability, string> = {
-  stable: "",
-  preview: "Preview: works, but output and thresholds may change in a minor release.",
-  experimental: "Experimental: not part of the 0.1 launch surface; may change or be removed.",
-  advanced:
-    "Advanced: a constrained escape hatch, not a workflow. No thresholds or decisions are applied to answers.",
+  review:
+    "jev-code review --task <text> | --task-file <path> [--task-source user|issue|agent] [--scope worktree|staged|branch] [--base <ref>] [--max-hunks N]",
+  failures:
+    "jev-code failures --log <path|-> [--task <text> | --task-file <path>] [--scope ...] [--base <ref>] [--no-diff] [--max-failures N]",
+  rules: "jev-code rules --rules <path> [--scope ...] [--base <ref>] [--max-pairs N]",
+  criteria:
+    "jev-code criteria --criteria <text> | --criteria-file <path|-> [--test-results <json|junit path>] [--scope ...] [--base <ref>] [--max-evidence N]",
+  comments:
+    "jev-code comments --comments <path|-> [--scope ...] [--base <ref>] [--no-diff] [--max-comments N]",
+  find: 'jev-code find "<task>" | --task <text> | --task-file <path> [--paths <glob>]... [--top N] [--excerpts] [--max-files N]',
+  ask: "jev-code ask --file <workspace-relative frame.json>",
 };
 
 function version(): string {
@@ -114,25 +105,20 @@ function version(): string {
 function mainHelp(): string {
   const width = Math.max(...Object.keys(WORKFLOWS).map((name) => name.length));
   const entries = Object.entries(WORKFLOWS) as Array<[string, WorkflowDefinition<unknown, unknown>]>;
-  const group = (title: string, stability: Stability) =>
-    `${title}:\n${entries
-      .filter(([, workflow]) => workflow.stability === stability)
-      .map(([name, workflow]) => `  ${name.padEnd(width)}  ${workflow.summary}`)
-      .join("\n")}`;
-  return `jev-code ${version()} — pre-review triage for coding-agent changes
+  const commands = entries
+    .map(([name, workflow]) => `  ${name.padEnd(width)}  ${workflow.summary}`)
+    .join("\n");
+  return `jev-code ${version()} — judgment tools for coding agents
 
 Usage: jev-code <command> [options]
 
-${group("Commands", "stable")}
+Experimental: every command and report may change.
 
-${group("Preview commands (output may change)", "preview")}
-
-${group("Experimental commands (not part of the 0.1 launch surface)", "experimental")}
-
-${group("Advanced", "advanced")}
+Commands:
+${commands}
 
 Global options:
-  --json                    Emit the stable JSON packet (schema jev-code.packet/v1)
+  --json                    Emit the versioned JSON packet (schema jev-code.packet/v1)
   --model <id>              Jev model (default ${DEFAULT_MODEL}, or ${MODEL_ENV})
   --offline                 Run built-in checks only; never call Jev
   --no-persist              Do not write .jev-code/runs artifacts
@@ -190,14 +176,13 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
     const { values, positionals } = parseArgs({
       args: rest,
       options: { ...GLOBAL_OPTIONS, ...COMMAND_OPTIONS[name] },
-      allowPositionals: name === "locate",
+      allowPositionals: name === "find",
       strict: true,
     });
     const v = values as Record<string, string | boolean | string[] | undefined>;
     if (v.help) {
-      const note = STABILITY_NOTE[WORKFLOWS[name].stability];
       io.stdout.write(
-        `${WORKFLOWS[name].summary}\n${note ? `\n${note}\n` : ""}\nUsage: ${COMMAND_USAGE[name]}\n\nRun "jev-code --help" for global options.\n`,
+        `${WORKFLOWS[name].summary}\n\nUsage: ${COMMAND_USAGE[name]}\n\nExperimental: this command and its report may change.\n\nRun "jev-code --help" for global options.\n`,
       );
       return EXIT.ok;
     }
@@ -251,7 +236,7 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
 
     let packet: Packet<unknown>;
     switch (name) {
-      case "flag-diff": {
+      case "review": {
         const taskSource = enumValue(v["task-source"] as string | undefined, "task-source", [
           "user",
           "issue",
@@ -269,7 +254,7 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
         );
         break;
       }
-      case "triage-failures": {
+      case "failures": {
         if (typeof v.log !== "string") throw new UsageError("--log <path|-> is required");
         const log = await readInput(v.log, "log");
         const task = await readTask(false);
@@ -286,7 +271,7 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
         );
         break;
       }
-      case "locate": {
+      case "find": {
         if (positionals.length > 1) throw new UsageError("pass the task as one quoted argument");
         const flagTask = await readTask(false);
         if (flagTask && positionals.length > 0)
@@ -307,7 +292,7 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
         );
         break;
       }
-      case "map-criteria": {
+      case "criteria": {
         if ((typeof v.criteria === "string") === (typeof v["criteria-file"] === "string")) {
           throw new UsageError("supply exactly one of --criteria or --criteria-file");
         }
@@ -330,7 +315,7 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
         );
         break;
       }
-      case "flag-rules": {
+      case "rules": {
         if (typeof v.rules !== "string" || v.rules === "-")
           throw new UsageError("--rules <path> (an explicit file) is required");
         const rules = await readInput(v.rules, "rules", 512 * 1024);
@@ -346,7 +331,7 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
         );
         break;
       }
-      case "triage-comments": {
+      case "comments": {
         if (typeof v.comments !== "string") throw new UsageError("--comments <path|-> is required");
         const comments = await readInput(v.comments, "comments");
         const maxComments = integer(v["max-comments"] as string | undefined, "max-comments", 1, 1000);
@@ -361,7 +346,7 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
         );
         break;
       }
-      case "run-frame": {
+      case "ask": {
         if (typeof v.file !== "string" || v.file === "-")
           throw new UsageError("--file <workspace-relative path> is required");
         packet = await WORKFLOWS[name].run({ file: v.file }, options);

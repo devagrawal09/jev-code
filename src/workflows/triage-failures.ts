@@ -34,13 +34,13 @@ export interface TriageFailuresInput {
 }
 
 export const TRIAGE_FAILURES = {
-  name: "triage-failures",
+  name: "failures",
   version: 1,
   budget: { requests: 80, inputTokens: 200_000, wallMs: 60_000 },
 } as const;
 
 export const FAILURE_POLICY = {
-  version: "triage-failures-policy@1",
+  version: "failures-policy@1",
   decisive: 0.6,
   causedConflict: 0.6,
   unrelatedConflict: 0.7,

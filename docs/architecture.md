@@ -25,7 +25,7 @@ production file must live in one of the four folders. Tests and scripts may impo
 
 ## What happens in a run
 
-Using `flag-diff` as the example:
+Using `review` as the example:
 
 1. **cli** parses flags, reads `TYPESAFE_API_KEY` and `TYPESAFE_MODEL` through `adapters/config.ts`, builds the
    dependencies in `adapters/dependencies.ts`, and calls the workflow listed in `cli/registry.ts`.
@@ -59,7 +59,7 @@ retry and validation behavior, and `core` can be tested with a fake port and no 
   files. Redaction is best effort, not a secret scanner.
 - **Repository text is untrusted evidence.** Workflows ask Jev whether a piece contains text aimed at an
   automated reviewer and flag it. That is a hint, not a prompt-injection defense. Answers never trigger actions,
-  and a custom question file (`run-frame`) has no field for commands, files to read, models or actions.
+  and a custom question file (`ask`) has no field for commands, files to read, models or actions.
 - **Budgets are hard stops.** When a request, input-token or time limit is reached, no more requests are sent.
 
 ## Records

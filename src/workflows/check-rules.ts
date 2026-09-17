@@ -53,13 +53,13 @@ export interface CheckRulesInput {
 }
 
 export const CHECK_RULES = {
-  name: "flag-rules",
+  name: "rules",
   version: 1,
   budget: { requests: 120, inputTokens: 200_000, wallMs: 60_000 },
 } as const;
 
 export const RULES_POLICY = {
-  version: "flag-rules-policy@1",
+  version: "rules-policy@1",
   maxRules: 50,
   rulesPerRequest: 12,
   violated: 0.7,

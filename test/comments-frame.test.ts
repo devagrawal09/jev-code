@@ -13,7 +13,7 @@ const STATUS = [
   "cannot_tell",
 ];
 
-describe("triage-comments", () => {
+describe("comments", () => {
   test("classifies comments against current code without obeying them", async () => {
     const repo = tempRepo({
       "src/cart.ts": "export function total(items, code) {\n  return items.length;\n}\n",
@@ -98,7 +98,7 @@ describe("triage-comments", () => {
   });
 });
 
-describe("run-frame", () => {
+describe("ask", () => {
   test("submits only validated state and questions and returns uncalibrated answers", async () => {
     const repo = tempRepo({ "frames/check.json": fixture("frame.json") });
     try {

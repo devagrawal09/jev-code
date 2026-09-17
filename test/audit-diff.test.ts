@@ -43,7 +43,7 @@ function setup() {
 const pathOf = (state: unknown) =>
   (state as { hunk?: { path?: string }; candidateHunk?: { path?: string } }).hunk?.path;
 
-describe("flag-diff", () => {
+describe("review", () => {
   test("flags weak hunks and weakened tests, clears enabler hunks, skips deterministic hunks", async () => {
     const repo = setup();
     try {

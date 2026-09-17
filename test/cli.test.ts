@@ -39,7 +39,20 @@ describe("cli", () => {
     try {
       const help = await cli(r.root, ["--help"]);
       assert.equal(help.code, 0);
-      for (const name of [
+      for (const name of ["review", "failures", "rules", "criteria", "comments", "find", "ask"]) {
+        assert.ok(help.stdout.includes(name), name);
+      }
+      assert.match(help.stdout, /Experimental: every command and report may change/);
+      assert.match(
+        help.stdout,
+        /review[\s\S]*failures[\s\S]*rules[\s\S]*criteria[\s\S]*comments[\s\S]*find[\s\S]*ask/,
+      );
+      assert.equal((await cli(r.root, [])).code, 64);
+      assert.match((await cli(r.root, ["--version"])).stdout, /^\d+\.\d+\.\d+\n$/);
+      assert.equal((await cli(r.root, ["deploy"])).code, 64);
+      assert.equal((await cli(r.root, ["constructor"])).code, 64);
+      // Unreleased names have no aliases.
+      for (const removed of [
         "flag-diff",
         "triage-failures",
         "flag-rules",
@@ -47,53 +60,41 @@ describe("cli", () => {
         "triage-comments",
         "locate",
         "run-frame",
+        "audit-diff",
+        "check-rules",
+        "check-criteria",
       ]) {
-        assert.ok(help.stdout.includes(name), name);
-      }
-      const [stable, preview, experimental, advanced] = help.stdout
-        .split(/\n(?=Preview commands|Experimental commands|Advanced:|Global options:)/)
-        .slice(0, 4);
-      assert.match(stable!, /flag-diff[\s\S]*triage-failures/);
-      assert.match(preview!, /flag-rules[\s\S]*map-criteria/);
-      assert.match(experimental!, /triage-comments[\s\S]*locate/);
-      assert.match(advanced!, /run-frame/);
-      assert.equal((await cli(r.root, [])).code, 64);
-      assert.match((await cli(r.root, ["--version"])).stdout, /^\d+\.\d+\.\d+\n$/);
-      assert.equal((await cli(r.root, ["deploy"])).code, 64);
-      assert.equal((await cli(r.root, ["constructor"])).code, 64);
-      // Pre-release names have no aliases.
-      for (const removed of ["audit-diff", "check-rules", "check-criteria"]) {
         assert.equal((await cli(r.root, [removed, "--help"])).code, 64, removed);
       }
-      const missing = await cli(r.root, ["flag-diff"]);
+      const missing = await cli(r.root, ["review"]);
       assert.equal(missing.code, 64);
       assert.match(missing.stderr, /task is required/);
-      assert.equal((await cli(r.root, ["flag-diff", "--task", "x", "--bogus"])).code, 64);
-      assert.equal((await cli(r.root, ["flag-diff", "--task", "x", "--scope", "everything"])).code, 64);
-      assert.equal((await cli(r.root, ["locate", "x", "--top", "-3"])).code, 64);
-      const commandHelp = await cli(r.root, ["flag-rules", "--help"]);
+      assert.equal((await cli(r.root, ["review", "--task", "x", "--bogus"])).code, 64);
+      assert.equal((await cli(r.root, ["review", "--task", "x", "--scope", "everything"])).code, 64);
+      assert.equal((await cli(r.root, ["find", "x", "--top", "-3"])).code, 64);
+      const commandHelp = await cli(r.root, ["rules", "--help"]);
       assert.equal(commandHelp.code, 0);
       assert.match(commandHelp.stdout, /--rules <path>/);
-      assert.match(commandHelp.stdout, /^Preview:/m);
-      assert.match((await cli(r.root, ["locate", "--help"])).stdout, /^Experimental:/m);
-      assert.match((await cli(r.root, ["run-frame", "--help"])).stdout, /^Advanced:/m);
-      assert.doesNotMatch((await cli(r.root, ["flag-diff", "--help"])).stdout, /Preview|Experimental/);
+      assert.match(commandHelp.stdout, /Experimental: this command and its report may change/);
+      assert.doesNotMatch(commandHelp.stdout, /Preview|Advanced/);
+      assert.match((await cli(r.root, ["review", "--help"])).stdout, /Experimental:/);
+      assert.match((await cli(r.root, ["ask", "--help"])).stdout, /Experimental:/);
     } finally {
       r.cleanup();
     }
   });
 
-  test("JSON output is a stable packet; human output is concise and advisory", async () => {
+  test("JSON output is a versioned packet; human output is concise and advisory", async () => {
     const r = repo();
     try {
       const adapter = fake((name) => (name === "task_relation" ? fakeScore(4, 3, 0.9) : undefined));
-      const json = await cli(r.root, ["flag-diff", "--task", "set a to two", "--json", "--no-persist"], {
+      const json = await cli(r.root, ["review", "--task", "set a to two", "--json", "--no-persist"], {
         adapter,
       });
       assert.equal(json.code, 0, json.stderr);
       const packet = JSON.parse(json.stdout);
       assert.equal(packet.schema, "jev-code.packet/v1");
-      assert.equal(packet.workflow, "flag-diff@1");
+      assert.equal(packet.workflow, "review@1");
       assert.equal(packet.advisory, true);
       assert.equal(packet.artifact, null);
       for (const key of [
@@ -112,7 +113,7 @@ describe("cli", () => {
       }
       assert.ok(!("approved" in packet) && !("pass" in packet));
 
-      const human = await cli(r.root, ["flag-diff", "--task", "set a to two", "--no-persist"], { adapter });
+      const human = await cli(r.root, ["review", "--task", "set a to two", "--no-persist"], { adapter });
       assert.equal(human.code, 0);
       assert.match(human.stdout, /advisory only/);
       assert.match(human.stdout, /not an approval/);
@@ -126,21 +127,21 @@ describe("cli", () => {
     const r = repo();
     try {
       const adapter = fake((name) => (name === "nondeterminism_signature" ? fakeNoul(0.1) : undefined));
-      const stdin = await cli(r.root, ["triage-failures", "--log", "-", "--json", "--no-persist"], {
+      const stdin = await cli(r.root, ["failures", "--log", "-", "--json", "--no-persist"], {
         adapter,
         stdin: fixture("go-failure.txt"),
       });
       assert.equal(stdin.code, 0, stdin.stderr);
       assert.equal(JSON.parse(stdin.stdout).summary.logSource, "stdin");
 
-      const escaped = await cli(r.root, ["triage-failures", "--log", "../../etc/passwd", "--json"]);
+      const escaped = await cli(r.root, ["failures", "--log", "../../etc/passwd", "--json"]);
       assert.equal(escaped.code, 65);
       assert.equal(JSON.parse(escaped.stdout).error.kind, "input");
-      const secret = await cli(r.root, ["map-criteria", "--criteria-file", ".env"]);
+      const secret = await cli(r.root, ["criteria", "--criteria-file", ".env"]);
       assert.equal(secret.code, 65);
 
       const criteria = await cli(r.root, [
-        "map-criteria",
+        "criteria",
         "--criteria-file",
         "notes/criteria.md",
         "--offline",
@@ -149,7 +150,7 @@ describe("cli", () => {
       ]);
       assert.equal(criteria.code, 11);
       const outside = await cli("/", [
-        "flag-diff",
+        "review",
         "--task",
         "x",
         "--repo",
@@ -174,7 +175,7 @@ describe("cli", () => {
           throw new Error(`request failed for key ${key}`);
         },
       };
-      const result = await cli(r.root, ["flag-diff", "--task", "set a to two", "--json", "--no-persist"], {
+      const result = await cli(r.root, ["review", "--task", "set a to two", "--json", "--no-persist"], {
         adapter: leaky,
         env: { TYPESAFE_API_KEY: key },
       });
@@ -185,7 +186,7 @@ describe("cli", () => {
           throw new TypeError(`boom ${key}`);
         },
       };
-      const crashed = await cli(r.root, ["flag-diff", "--task", "x", "--no-persist"], { adapter: crash });
+      const crashed = await cli(r.root, ["review", "--task", "x", "--no-persist"], { adapter: crash });
       assert.ok(!crashed.stdout.includes(key) && !crashed.stderr.includes(key));
     } finally {
       if (previous === undefined) delete process.env.TYPESAFE_API_KEY;

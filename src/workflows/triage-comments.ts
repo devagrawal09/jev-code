@@ -25,13 +25,13 @@ export interface TriageCommentsInput {
 }
 
 export const TRIAGE_COMMENTS = {
-  name: "triage-comments",
+  name: "comments",
   version: 1,
   budget: { requests: 100, inputTokens: 150_000, wallMs: 60_000 },
 } as const;
 
 export const COMMENTS_POLICY = {
-  version: "triage-comments-policy@1",
+  version: "comments-policy@1",
   maxBodyChars: MAX_COMMENT_BODY_CHARS,
   maxReplyChars: 1000,
   maxReplies: 5,

@@ -29,15 +29,8 @@ import {
 import type { Packet } from "../workflows/types.ts";
 import type { HumanSection } from "./output.ts";
 
-/**
- * Public maturity of a command. `stable` workflows are the launch surface; `preview` workflows work but their
- * output may change; `experimental` workflows are not part of the launch claim; `advanced` is an escape hatch.
- */
-export type Stability = "stable" | "preview" | "experimental" | "advanced";
-
 export interface WorkflowDefinition<I, R> {
   info: WorkflowInfo;
-  stability: Stability;
   summary: string;
   run(input: I, options: RunOptions): Promise<Packet<R>>;
   render(packet: Packet<R>): HumanSection[];
@@ -48,8 +41,7 @@ const pct = (value: number | null | undefined) =>
 
 export const auditDiffWorkflow: WorkflowDefinition<AuditDiffInput, AuditHunkResult> = {
   info: AUDIT_DIFF,
-  stability: "stable",
-  summary: "Flag diff hunks weakly related to the task and test hunks that weaken expectations",
+  summary: "Find changes that may not match the task or may weaken tests",
   run: auditDiff,
   render: (packet) => [
     {
@@ -67,8 +59,7 @@ export const auditDiffWorkflow: WorkflowDefinition<AuditDiffInput, AuditHunkResu
 
 export const triageFailuresWorkflow: WorkflowDefinition<TriageFailuresInput, FailureResult> = {
   info: TRIAGE_FAILURES,
-  stability: "stable",
-  summary: "Parse a supplied test/CI log into failure blocks and classify each against the diff",
+  summary: "Sort test failures and show which may come from the current changes",
   run: triageFailures,
   render: (packet) => [
     {
@@ -86,8 +77,7 @@ export const triageFailuresWorkflow: WorkflowDefinition<TriageFailuresInput, Fai
 
 export const locateWorkflow: WorkflowDefinition<LocateInput, LocateResult> = {
   info: LOCATE,
-  stability: "experimental",
-  summary: "Rank tracked files for a task from metadata and bounded excerpts (a shortlist, not an answer)",
+  summary: "Find files that may be relevant to a task",
   run: locate,
   render: (packet) => [
     {
@@ -108,8 +98,7 @@ export const locateWorkflow: WorkflowDefinition<LocateInput, LocateResult> = {
 
 export const checkCriteriaWorkflow: WorkflowDefinition<CheckCriteriaInput, CriterionResult> = {
   info: CHECK_CRITERIA,
-  stability: "preview",
-  summary: "Map each acceptance criterion to diff and supplied test-record evidence",
+  summary: "Show which task requirements have code or test evidence",
   run: checkCriteria,
   render: (packet) => [
     {
@@ -131,8 +120,7 @@ export const checkCriteriaWorkflow: WorkflowDefinition<CheckCriteriaInput, Crite
 
 export const checkRulesWorkflow: WorkflowDefinition<CheckRulesInput, RulePairResult> = {
   info: CHECK_RULES,
-  stability: "preview",
-  summary: "Flag diff hunks that may break human-approved semantic rules from a rules file",
+  summary: "Find changes that may break project rules",
   run: checkRules,
   render: (packet) => [
     {
@@ -153,9 +141,7 @@ export const checkRulesWorkflow: WorkflowDefinition<CheckRulesInput, RulePairRes
 
 export const triageCommentsWorkflow: WorkflowDefinition<TriageCommentsInput, CommentResult> = {
   info: TRIAGE_COMMENTS,
-  stability: "experimental",
-  summary:
-    "Relate review comments to current code: actionable, already addressed, stale, unclear, non-actionable",
+  summary: "Show which review comments still need attention",
   run: triageComments,
   render: (packet) => [
     {
@@ -172,8 +158,7 @@ export const triageCommentsWorkflow: WorkflowDefinition<TriageCommentsInput, Com
 
 export const runFrameWorkflow: WorkflowDefinition<{ file: string }, FrameAnswerResult> = {
   info: RUN_FRAME,
-  stability: "advanced",
-  summary: "Escape hatch: submit one validated custom frame file; answers are uncalibrated",
+  summary: "Ask Jev your own yes/no, multiple-choice, or scoring questions",
   run: runFrame,
   render: (packet) => [
     {
@@ -191,13 +176,13 @@ export const runFrameWorkflow: WorkflowDefinition<{ file: string }, FrameAnswerR
 
 /** Transport-neutral registry. A CLI, MCP adapter, or hook runner can dispatch through it. */
 export const WORKFLOWS = {
-  "flag-diff": auditDiffWorkflow,
-  "triage-failures": triageFailuresWorkflow,
-  "flag-rules": checkRulesWorkflow,
-  "map-criteria": checkCriteriaWorkflow,
-  "triage-comments": triageCommentsWorkflow,
-  locate: locateWorkflow,
-  "run-frame": runFrameWorkflow,
+  review: auditDiffWorkflow,
+  failures: triageFailuresWorkflow,
+  rules: checkRulesWorkflow,
+  criteria: checkCriteriaWorkflow,
+  comments: triageCommentsWorkflow,
+  find: locateWorkflow,
+  ask: runFrameWorkflow,
 } as const;
 
 export type WorkflowName = keyof typeof WORKFLOWS;

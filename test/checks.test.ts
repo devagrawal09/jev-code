@@ -38,7 +38,7 @@ function criteriaAdapter() {
   });
 }
 
-describe("map-criteria", () => {
+describe("criteria", () => {
   test("maps criteria to evidence and caps support without linked passing tests", async () => {
     const repo = criteriaRepo();
     try {
@@ -97,7 +97,7 @@ describe("map-criteria", () => {
   });
 });
 
-describe("flag-rules", () => {
+describe("rules", () => {
   test("judges only semantic rules on in-scope hunks and flags or parks by policy", async () => {
     const repo = tempRepo({ "src/client.ts": "export const x = 1;\n", "docs/guide.md": "# Guide\n" });
     try {

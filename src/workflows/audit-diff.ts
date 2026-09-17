@@ -35,13 +35,13 @@ export interface AuditDiffInput {
 }
 
 export const AUDIT_DIFF = {
-  name: "flag-diff",
+  name: "review",
   version: 1,
   budget: { requests: 120, inputTokens: 150_000, wallMs: 60_000 },
 } as const;
 
 export const AUDIT_POLICY = {
-  version: "flag-diff-policy@1",
+  version: "review-policy@1",
   weakLowMass: 0.7,
   weakens: 0.7,
   statedInTask: 0.5,

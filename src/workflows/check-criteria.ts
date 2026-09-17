@@ -35,13 +35,13 @@ export interface CheckCriteriaInput {
 }
 
 export const CHECK_CRITERIA = {
-  name: "map-criteria",
+  name: "criteria",
   version: 1,
   budget: { requests: 150, inputTokens: 250_000, wallMs: 90_000 },
 } as const;
 
 export const CRITERIA_POLICY = {
-  version: "map-criteria-policy@1",
+  version: "criteria-policy@1",
   maxCriteria: 20,
   maxCriterionChars: 300,
   accept: 0.6,

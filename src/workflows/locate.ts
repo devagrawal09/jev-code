@@ -33,13 +33,13 @@ export interface LocateInput {
 }
 
 export const LOCATE = {
-  name: "locate",
+  name: "find",
   version: 1,
   budget: { requests: 600, inputTokens: 1_200_000, wallMs: 120_000 },
 } as const;
 
 export const LOCATE_POLICY = {
-  version: "locate-policy@1",
+  version: "find-policy@1",
   shardSize: 20,
   acceptMetaHighMass: 0.35,
   maxExcerptCandidates: 24,

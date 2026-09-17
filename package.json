@@ -1,7 +1,7 @@
 {
   "name": "jev-code",
   "version": "0.1.0",
-  "description": "Pre-review triage for coding-agent changes: flags diff hunks and test changes worth a second look and sorts failing test logs. Advisory only; never approves. Optional TypeSafe Jev with your own key.",
+  "description": "Experimental judgment tools that coding agents can delegate common tasks to. Review changes, understand failures, check rules and requirements, find relevant code, and more.",
   "license": "MIT",
   "author": "Dev Agrawal",
   "repository": {
@@ -36,8 +36,8 @@
     "jev",
     "coding-agents",
     "ai-agents",
-    "pre-review",
-    "triage",
+    "judgment",
+    "developer-tools",
     "git-diff",
     "test-failures",
     "cli"
