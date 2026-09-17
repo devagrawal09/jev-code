@@ -134,7 +134,8 @@ Exit codes: 0 complete · 10 incomplete coverage · 11 Jev not called (built-in 
             12 budget exhausted · 64 usage error · 65 invalid input · 70 internal error
 Results are advisory. No command edits your code, runs tests, posts comments, or approves anything.
 Every report lists what was not checked. "No flags" is not an approval.
-TYPESAFE_API_KEY is read from the process environment only.
+TYPESAFE_API_KEY is required for Jev judgments and read from the process environment only.
+Without it, only limited built-in checks run.
 `;
 }
 

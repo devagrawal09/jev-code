@@ -44,8 +44,7 @@ A common agent flow starts with `review`, then uses `failures` when tests or CI 
 > **Release status:** the `jev-code` package on npm is `0.0.1`, a placeholder with no working commands.
 > This README describes `0.1.0`, which is not released yet. Until it is, build from source.
 
-**Requirements:** Node.js 22.18 or newer, `git`, and a Git repository to check. A TypeSafe API key is
-optional. CI tests on Linux; Windows is untested.
+**Requirements:** Node.js 22.18 or newer, `git`, and a Git repository to check. A TypeSafe API key is required for Jev judgments. Without one, only limited local checks run. CI tests on Linux; Windows is untested.
 
 **Install** (from source, until 0.1.0 is on npm):
 
@@ -59,11 +58,13 @@ node dist/cli.js --help   # use "node /path/to/jev-code/dist/cli.js" wherever th
 
 After 0.1.0 is released: `npm install --global jev-code`.
 
-**API key** (optional). jev-code reads it only from this environment variable, never from files or flags:
+**API key.** A TypeSafe API key is required for Jev judgments. jev-code reads it only from this environment variable, never from files or flags:
 
 ```sh
 export TYPESAFE_API_KEY="<your TypeSafe API key>"
 ```
+
+Without the key, jev-code does not call an AI model. It can still collect evidence and run exact local checks, but semantic questions remain unanswered. When model work remains, the report marks coverage incomplete and exits with code `11`. Use `--offline` when you want this limited local-only mode explicitly.
 
 **Example.** An agent was asked to fix a crash. It did, but it also skipped the test and removed an assertion.
 Inside that repository:
