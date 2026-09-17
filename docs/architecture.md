@@ -37,7 +37,7 @@ Using `check` as the example:
 4. **Questions.** For each remaining piece, the workflow builds a request: a small JSON state plus
    fixed-choice questions (yes/no, choice or score). `workflows/run.ts` redacts it and hands it to
    `core/executor.ts`, which reserves budget, calls the Jev port, validates the answer shape and retries
-   transient failures. If the budget is exhausted or Jev is unavailable during a run, the piece is marked
+   transient failures or invalid model responses. If the budget is exhausted or Jev is unavailable during a run, the piece is marked
    unjudged instead. This lives in `core`, so it is the same for `check`, `triage` and `find`.
 5. **Decisions** are made in code with fixed, versioned thresholds (`workflows/policy.ts`), not by the model.
    Unclear answers are "parked" for a human to look at.

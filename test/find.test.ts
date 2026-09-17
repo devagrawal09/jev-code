@@ -135,4 +135,29 @@ describe("find", () => {
       repo.cleanup();
     }
   });
+
+  test("failed candidates are returned with their errors", async () => {
+    const repo = setup();
+    try {
+      const adapter = fake();
+      let rejected = false;
+      const failing = {
+        requests: adapter.requests,
+        async ask(request: JevRequest, opts: { timeoutMs: number }) {
+          if (!rejected && candidatesIn(request).length > 0) {
+            rejected = true;
+            return { model: request.model, answers: {}, usage: { input_tokens: 1, output_tokens: 1 } };
+          }
+          return adapter.ask(request, opts);
+        },
+      };
+      const packet = await find({ task: "charge" }, options(repo.root, failing));
+      const failed = packet.results.filter((result) => result.disposition === "failed");
+      assert.equal(failed.length, packet.coverage.failed);
+      assert.ok(failed.length > 0);
+      assert.ok(failed.every((result) => result.error));
+    } finally {
+      repo.cleanup();
+    }
+  });
 });

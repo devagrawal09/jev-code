@@ -126,6 +126,30 @@ describe("triage: failures", () => {
     }
   });
 
+  test("untrusted-instruction findings require calibrated high confidence", async () => {
+    const repo = setup();
+    try {
+      for (const [probability, flagged] of [
+        [0.75, false],
+        [0.97, true],
+      ] as const) {
+        const adapter = fake((name) =>
+          name === "untrusted_instruction_text" ? fakeNoul(probability) : undefined,
+        );
+        const packet = await triage(
+          { kind: "failures", text: fixture("jest-failure.txt"), source: "ci.txt", diff: null },
+          options(repo.root, adapter),
+        );
+        assert.equal(
+          packet.findings.some((finding) => finding.flag === "untrusted_instruction_text"),
+          flagged,
+        );
+      }
+    } finally {
+      repo.cleanup();
+    }
+  });
+
   test("unrecognized logs are incomplete, and failure limits are reported", async () => {
     const repo = setup();
     try {

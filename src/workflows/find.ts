@@ -18,6 +18,7 @@ import {
   massAtLeast,
   round,
   roundedDistribution,
+  UNTRUSTED_INSTRUCTION_THRESHOLD,
   untrustedInstructionQuestion,
 } from "./policy.ts";
 import type { RedactionPort, WorkspaceSource } from "./ports.ts";
@@ -520,7 +521,7 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
       ) {
         gaps.push(`${candidate.path}: ${missing} not shown`);
       }
-      if (answer.untrusted >= 0.7) {
+      if (answer.untrusted >= UNTRUSTED_INSTRUCTION_THRESHOLD) {
         findings.push({
           flag: "untrusted_instruction_text",
           id: candidate.id,
@@ -573,6 +574,7 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
     });
   }
   const parkedResults = [...results.values()].filter((result) => result.disposition === "parked");
+  const failedResults = [...results.values()].filter((result) => result.disposition === "failed");
   return run.finish({
     findings: sortFindings(findings),
     parked,
@@ -584,7 +586,7 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
       "files were ranked by metadata unless an excerpt was read",
       "content beyond shown excerpt ranges",
     ],
-    results: [...shortlist, ...parkedResults],
+    results: [...shortlist, ...parkedResults, ...failedResults],
     summary: {
       task: { tokens: tokens.slice(0, 20) },
       tracked: inv.tracked,

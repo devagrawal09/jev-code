@@ -4,7 +4,13 @@ import { type ChoiceAnswer, expectKeys, readChoice, readNoul } from "../core/val
 import { isSecretPath } from "./classify.ts";
 import { type DiffEvidence, hunkEvidence, hunkRef, type Section, unjudgedOrFailed } from "./common.ts";
 import { type Hunk, MAX_COMMENT_BODY_CHARS, normalizeForSignature, type ReviewComment } from "./evidence.ts";
-import { EVIDENCE_POLICY, round, roundedDistribution, untrustedInstructionQuestion } from "./policy.ts";
+import {
+  EVIDENCE_POLICY,
+  round,
+  roundedDistribution,
+  UNTRUSTED_INSTRUCTION_THRESHOLD,
+  untrustedInstructionQuestion,
+} from "./policy.ts";
 import type { WorkspaceSource } from "./ports.ts";
 import { buildFrame, type Run } from "./run.ts";
 import type { EvidenceRef, Exclusion, Finding, Parked } from "./types.ts";
@@ -33,7 +39,7 @@ export const TRIAGE_COMMENTS_POLICY = {
   lowSignal: 0.4,
   notClaim: 0.6,
   conflictConcrete: 0.7,
-  untrusted: 0.7,
+  untrusted: UNTRUSTED_INSTRUCTION_THRESHOLD,
 } as const;
 
 const CODE_STATUS = [

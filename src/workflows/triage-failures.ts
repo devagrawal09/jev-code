@@ -9,6 +9,7 @@ import {
   EVIDENCE_POLICY,
   round,
   roundedDistribution,
+  UNTRUSTED_INSTRUCTION_THRESHOLD,
   untrustedInstructionQuestion,
 } from "./policy.ts";
 import type { WorkspaceSource } from "./ports.ts";
@@ -36,7 +37,7 @@ export const TRIAGE_FAILURES_POLICY = {
   unrelatedConflict: 0.7,
   nondeterminism: 0.7,
   probeMissingEvidence: 0.5,
-  untrusted: 0.7,
+  untrusted: UNTRUSTED_INSTRUCTION_THRESHOLD,
   probeContextLines: 15,
 } as const;
 

@@ -65,7 +65,7 @@ describe("core frame executor", () => {
 
   test("invalid envelopes are rejected and budget denials reach the sink", async () => {
     const broken: JevPort = { ask: async () => ({ model: "m", answers: {} }) };
-    const invalid = new FrameExecutor({ port: broken, model: "m", budget: LIMITS });
+    const invalid = new FrameExecutor({ port: broken, model: "m", budget: LIMITS, retries: 0 });
     const outcome = await invalid.run(frame("x"));
     assert.equal(!outcome.ok && outcome.reason, "invalid");
     assert.equal(invalid.usage().invalidResponses, 1);
@@ -87,6 +87,22 @@ describe("core frame executor", () => {
       [true, false],
     );
     assert.deepEqual(denied, [`${frame("b").id}:requests`]);
+  });
+
+  test("invalid model responses are retried within the cap", async () => {
+    let calls = 0;
+    const port: JevPort = {
+      async ask(request, options) {
+        calls++;
+        if (calls === 1) return { model: "m", answers: {} };
+        return createFakeAdapter().ask(request, options);
+      },
+    };
+    const executor = new FrameExecutor({ port, model: "m", budget: LIMITS, retries: 1 });
+    const outcome = await executor.run(frame("x"));
+    assert.equal(outcome.ok, true);
+    assert.equal(calls, 2);
+    assert.equal(executor.usage().invalidResponses, 1);
   });
 
   test("an authentication failure disables the port for concurrent frames", async () => {

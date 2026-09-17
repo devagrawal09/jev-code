@@ -231,9 +231,10 @@ export class FrameExecutor<P = unknown> {
         return { ok: true, value, frameId: frame.id, model: envelope.model };
       } catch (error) {
         this.counters.invalidResponses++;
-        const message =
-          error instanceof ValidationError ? error.message : `parser error: ${this.describe(error)}`;
+        const validationError = error instanceof ValidationError;
+        const message = validationError ? error.message : `parser error: ${this.describe(error)}`;
         await sink?.attempt?.({ ...base, latencyMs, result: "invalid", response, error: message });
+        if (validationError && attempt <= this.retries) continue;
         return fail("invalid", message);
       }
     }

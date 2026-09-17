@@ -94,7 +94,7 @@ describe("run executor", () => {
 
   test("invalid answers are rejected, not consumed", async () => {
     const adapter = createFakeAdapter(() => ({ type: "noul", noul: 7 }));
-    const run = await Run.start(WORKFLOW, runOptions("/tmp", adapter), {});
+    const run = await Run.start(WORKFLOW, runOptions("/tmp", adapter, { retries: 0 }), {});
     const outcome = await run.judge(frame("x"));
     assert.equal(outcome.ok, false);
     assert.equal(!outcome.ok && outcome.reason, "invalid");
