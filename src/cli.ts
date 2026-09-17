@@ -135,7 +135,7 @@ Global options:
   --json                    Emit the stable JSON packet (schema jev-code.packet/v1)
   --model <id>              Jev model (default ${DEFAULT_MODEL}, or ${MODEL_ENV})
   --offline                 Run built-in checks only; never call Jev
-  --no-persist              Do not write .jev/runs artifacts
+  --no-persist              Do not write .jev-code/runs artifacts
   --repo <dir>              Repository root (default: git top level of the current directory)
   --concurrency <n>         Parallel Jev requests (1-16, default 4)
   --max-requests <n>        Override the workflow request budget

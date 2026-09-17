@@ -54,9 +54,17 @@ export {
   ValidationError,
 } from "./core/validation.ts";
 // workflows: domain workflows, run context, evidence types, and ports
-export { type AuditDiffInput, auditDiff } from "./workflows/audit-diff.ts";
-export { type CheckCriteriaInput, checkCriteria, parseCriteria } from "./workflows/check-criteria.ts";
-export { type CheckRulesInput, checkRules, parseRules } from "./workflows/check-rules.ts";
+export { type AuditDiffInput as FlagDiffInput, auditDiff as flagDiff } from "./workflows/audit-diff.ts";
+export {
+  type CheckCriteriaInput as MapCriteriaInput,
+  checkCriteria as mapCriteria,
+  parseCriteria,
+} from "./workflows/check-criteria.ts";
+export {
+  type CheckRulesInput as FlagRulesInput,
+  checkRules as flagRules,
+  parseRules,
+} from "./workflows/check-rules.ts";
 export { classifyPath, globToRegExp, isSecretPath } from "./workflows/classify.ts";
 export { InputError } from "./workflows/errors.ts";
 export type {

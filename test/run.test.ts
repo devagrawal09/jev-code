@@ -185,7 +185,7 @@ describe("run executor", () => {
       assert.equal(record.result, "ok");
       assert.equal(record.requestedModel, "jev-1.13.0");
       assert.equal(record.template, "test@1");
-      assert.ok(existsSync(join(repo.root, ".jev/.gitignore")));
+      assert.ok(existsSync(join(repo.root, ".jev-code/.gitignore")));
       assert.equal(repo.git("status", "--porcelain"), "");
     } finally {
       if (previous === undefined) delete process.env.TYPESAFE_API_KEY;

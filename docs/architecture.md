@@ -98,7 +98,7 @@ Concrete implementations.
 - `jev.ts`: the TypeSafe SDK `JevPort` and SDK error classification. `fake-jev.ts`: a deterministic fake port.
 - `git.ts`, `paths.ts`: read-only Git commands and workspace-contained file reads.
 - `diff.ts`, `logs.ts`, `comments.ts`, `test-records.ts`: parsers for external formats.
-- `redact.ts`: credential redaction. `recorder.ts`: `.jev/runs` artifact persistence.
+- `redact.ts`: credential redaction. `recorder.ts`: `.jev-code/runs` artifact persistence.
 - `config.ts`: environment configuration (`TYPESAFE_API_KEY`, `TYPESAFE_MODEL`).
 - `dependencies.ts`: builds `WorkflowDependencies` for a local workspace.
 

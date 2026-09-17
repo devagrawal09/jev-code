@@ -119,9 +119,9 @@ try {
     if (!ok) console.log(result.stdout.slice(0, 2000), result.stderr.slice(0, 2000));
   }
   const status = execFileSync("git", ["status", "--porcelain", "--ignored"], { cwd: root, encoding: "utf8" });
-  if (!status.includes(".jev/")) {
+  if (!status.includes(".jev-code/")) {
     failures++;
-    console.log("FAIL expected persisted .jev/ artifacts to exist and be ignored");
+    console.log("FAIL expected persisted .jev-code/ artifacts to exist and be ignored");
   }
   console.log(failures === 0 ? `smoke: all ${cases.length} cases passed` : `smoke: ${failures} failure(s)`);
   process.exitCode = failures === 0 ? 0 : 1;

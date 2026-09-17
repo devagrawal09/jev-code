@@ -4,10 +4,10 @@ import type { JsonObject, JsonValue } from "../core/types.ts";
 import type { ArtifactWriter } from "../workflows/ports.ts";
 import { redactJson } from "./redact.ts";
 
-export const ARTIFACT_ROOT = ".jev/runs";
+export const ARTIFACT_ROOT = ".jev-code/runs";
 
 /**
- * Writes one run's artifacts under `.jev/runs/<runId>`. Every value passes through the
+ * Writes one run's artifacts under `.jev-code/runs/<runId>`. Every value passes through the
  * redactor before it touches disk. Files are 0600 and directories 0700.
  */
 export class Recorder implements ArtifactWriter {
@@ -21,7 +21,7 @@ export class Recorder implements ArtifactWriter {
   }
 
   static async open(root: string, runId: string): Promise<Recorder> {
-    const jevDir = join(root, ".jev");
+    const jevDir = join(root, ".jev-code");
     await mkdir(jevDir, { recursive: true, mode: 0o700 });
     // Keep artifacts out of commits even when the repository's .gitignore does not list them.
     await writeFile(join(jevDir, ".gitignore"), "*\n", { flag: "wx", mode: 0o600 }).catch(() => undefined);

@@ -241,14 +241,14 @@ codes means the change passed or failed. Read `status` and `findings` instead.
 
 ## What is stored and what is sent
 
-**Stored locally.** Unless you pass `--no-persist`, each run writes `.jev/runs/<run-id>/` in the repository:
+**Stored locally.** Unless you pass `--no-persist`, each run writes `.jev-code/runs/<run-id>/` in the repository:
 
 - `manifest.json`, `inputs.json`, `candidates.json`, `packet.json`, and when relevant `decisions.ndjson` and
   `events.ndjson`;
 - `frames.ndjson`: every Jev request and response, after redaction. **It can contain code from your diff and
   lines from your logs.**
 
-Files are created with mode `0600` and directories with `0700`. jev-code writes `.jev/.gitignore` containing
+Files are created with mode `0600` and directories with `0700`. jev-code writes `.jev-code/.gitignore` containing
 `*`, so artifacts stay out of commits even if your own `.gitignore` does not list them. jev-code sends no
 telemetry and makes no network calls of its own besides Jev requests.
 
@@ -298,7 +298,7 @@ the whole log into the agent's context.
 ## Security model and non-goals
 
 - **Read-only on your code.** jev-code runs read-only `git` commands, reads files only inside the repository,
-  and writes only under `.jev/`. It never edits code, runs tests, posts comments or resolves threads.
+  and writes only under `.jev-code/`. It never edits code, runs tests, posts comments or resolves threads.
 - **Repository text is untrusted.** Diffs, logs and comments are sent as evidence with an instruction not to
   follow directives inside them, and `flag-diff` asks whether a hunk contains text aimed at an automated
   reviewer. This is a hint, **not** a prompt-injection defense or a security boundary.
