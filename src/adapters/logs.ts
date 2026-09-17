@@ -11,6 +11,7 @@ import {
 } from "../workflows/evidence.ts";
 
 const ANCHORS: Array<{ kind: string; pattern: RegExp }> = [
+  { kind: "bun_fail", pattern: /^\(fail\)\s+\S/ },
   { kind: "jest_fail", pattern: /^\s*FAIL\s+\S/ },
   { kind: "jest_test", pattern: /^\s*●\s+\S.*/ },
   { kind: "vitest_fail", pattern: /^\s*(?:[×✗✕]|FAIL)\s+\S.*(?:>|›)/ },
@@ -32,6 +33,7 @@ const ANCHORS: Array<{ kind: string; pattern: RegExp }> = [
 const STACK_LINE =
   /^\s+at\s|^\s+File "|^\s*[\w./-]+\.(?:go|rs|py|ts|js|java|rb):\d+|^\s+\.\.\.|^\s*\^+\s*$|^E\s{2,}/;
 const TEST_NAME: RegExp[] = [
+  /^\(fail\)\s+(.+?)(?:\s+\[[^\]]+\])?$/,
   /--- FAIL: (\S+)/,
   /^(?:FAILED|ERROR)\s+(\S+::\S+)/,
   /^\s*●\s+(.+)$/,
@@ -70,6 +72,9 @@ const TIMEOUT =
   /Timeout of \d+ ?ms exceeded|timed out after|Exceeded timeout|context deadline exceeded|test timed out/i;
 
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, "g");
+const BUN_OUTCOME = /^\((?:pass|fail|skip|todo)\)\s+/;
+const BUN_FAIL = /^\(fail\)\s+/;
+const BUN_FAILURE_SUMMARY = /^\d+ tests? failed:/;
 
 export function stripAnsi(text: string): string {
   return text.replace(ANSI, "");
@@ -82,9 +87,41 @@ export function parseFailureLog(text: string, context = LOG_CONTEXT_LINES): Pars
   if (lines.length > MAX_LOG_LINES)
     throw new InputError(`log has ${lines.length} lines; the limit is ${MAX_LOG_LINES}`);
 
+  // Bun emits each detailed failure before a terminal `(fail) suite > test` line, then repeats all
+  // of those names in a summary. Outcome boundaries are more precise than overlapping error windows.
+  const bunSummary = lines.findIndex((line) => BUN_FAILURE_SUMMARY.test(line));
+  const bunEnd = bunSummary < 0 ? lines.length : bunSummary;
+  const bunBlocks: FailureBlock[] = [];
+  const bunRanges: Array<{ start: number; end: number }> = [];
+  let previousOutcome = -1;
+  for (let index = 0; index < bunEnd; index++) {
+    const line = lines[index]!;
+    if (!BUN_OUTCOME.test(line)) continue;
+    if (BUN_FAIL.test(line)) {
+      const start = previousOutcome + 1;
+      const all = lines
+        .slice(start, index + 1)
+        .map((value, offset) => ({ n: start + offset + 1, text: value }));
+      const head = Math.floor(MAX_BLOCK_LINES / 2);
+      const shown =
+        all.length <= MAX_BLOCK_LINES
+          ? all
+          : [...all.slice(0, head), ...all.slice(all.length - (MAX_BLOCK_LINES - head))];
+      bunBlocks.push(toBlock(shown, all.length - shown.length, ["bun_fail"]));
+      bunRanges.push({ start, end: index });
+    }
+    previousOutcome = index;
+  }
   const anchorsAt = new Map<number, string[]>();
+  let bunRangeIndex = 0;
   for (const [index, line] of lines.entries()) {
-    const kinds = ANCHORS.filter(({ pattern }) => pattern.test(line)).map(({ kind }) => kind);
+    while (bunRanges[bunRangeIndex] && bunRanges[bunRangeIndex]!.end < index) bunRangeIndex++;
+    const bunRange = bunRanges[bunRangeIndex];
+    if (bunRange && index >= bunRange.start) continue;
+    const kinds = ANCHORS.filter(
+      ({ kind, pattern }) =>
+        pattern.test(line) && !(kind === "bun_fail" && bunSummary >= 0 && index >= bunSummary),
+    ).map(({ kind }) => kind);
     if (kinds.length > 0) anchorsAt.set(index, kinds);
   }
 
@@ -104,7 +141,7 @@ export function parseFailureLog(text: string, context = LOG_CONTEXT_LINES): Pars
     }
   }
 
-  const blocks = windows
+  const genericBlocks = windows
     .filter((window) => window.end >= window.start)
     .map((window) => {
       const all = lines
@@ -113,6 +150,7 @@ export function parseFailureLog(text: string, context = LOG_CONTEXT_LINES): Pars
       const shown = all.length > MAX_BLOCK_LINES ? all.slice(0, MAX_BLOCK_LINES) : all;
       return toBlock(shown, all.length - shown.length, [...window.anchors]);
     });
+  const blocks = [...bunBlocks, ...genericBlocks].sort((a, b) => a.startLine - b.startLine);
   return { totalLines: lines.length, blocks };
 }
 

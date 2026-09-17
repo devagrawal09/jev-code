@@ -12,7 +12,7 @@ function setup() {
   const files: Record<string, string> = {
     ".env": "TOKEN=abc",
     "package-lock.json": "{}",
-    "src/webhooks/retry.ts": `// webhook delivery\nexport function scheduleRetry(event) {\n${Array.from({ length: 260 }, (_, i) => `  // step ${i}`).join("\n")}\n  return chargeOnce(event);\n}\n`,
+    "src/webhooks/retry.ts": `// webhook delivery\nexport function scheduleRetry(event) {\n${Array.from({ length: 560 }, (_, i) => `  // step ${i}`).join("\n")}\n  return chargeOnce(event);\n}\n`,
     "src/billing/charge.ts": "export function chargeOnce(event) {\n  return event.id;\n}\n",
   };
   for (let index = 0; index < 43; index++)
@@ -71,6 +71,7 @@ describe("find", () => {
       assert.equal(packet.results[0]!.rank, 1);
       assert.deepEqual(packet.results[0]!.probesRun, ["read-excerpt@1", "read-next-region@1"]);
       assert.equal(packet.results[0]!.excerpt!.ranges.length, 2);
+      assert.ok(Number(packet.results[0]!.excerpt!.ranges[1]!.split("-")[0]) > 300);
       assert.ok(packet.results[0]!.excerpt!.text!.includes("scheduleRetry"));
       assert.equal(packet.results[1]!.path, "src/billing/charge.ts");
       assert.equal(excerptCalls, 3);
@@ -96,6 +97,7 @@ describe("find", () => {
       );
       assert.equal(one.summary.noStrongCandidate, true);
       assert.ok(one.findings.some((finding) => finding.flag === "no_strong_candidate"));
+      assert.equal(one.results.length, 0, "irrelevant candidates do not pad the shortlist");
     } finally {
       repo.cleanup();
     }
@@ -156,6 +158,59 @@ describe("find", () => {
       assert.equal(failed.length, packet.coverage.failed);
       assert.ok(failed.length > 0);
       assert.ok(failed.every((result) => result.error));
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  test("compound tasks reserve shortlist space for each requested facet", async () => {
+    const files: Record<string, string> = {
+      "src/session-store.ts": "export class PersistentSessionStore {}\n",
+      "src/subagent-runtime.ts": "export class SubagentRuntime {}\n",
+      "test/subagent-orchestration.test.ts": "test('subagent orchestration', () => {});\n",
+    };
+    for (let index = 0; index < 12; index++)
+      files[`src/daemon-${index}.ts`] = `export class DaemonLifecycle${index} {}\n`;
+    const repo = tempRepo(files);
+    try {
+      const adapter = fake((name, _question, request) => {
+        const candidates = candidatesIn(request);
+        if (candidates.length > 0) {
+          const id = name.replace(/^(relevance|role)_/, "");
+          const path = candidates.find((candidate) => candidate.id === id)?.path ?? "";
+          if (name.startsWith("relevance_"))
+            return fakeScore(4, path.includes("daemon") || path.startsWith("test/") ? 3 : 2, 0.9);
+          return fakeChoice(ROLES, path.startsWith("test/") ? "test" : "implementation", 0.9);
+        }
+        const path = (request.state as { candidate: { path: string } }).candidate.path;
+        if (name === "relevance") return fakeScore(4, path.includes("daemon") ? 3 : 2, 0.9);
+        if (name === "target_definition_visible") return fakeNoul(0.9);
+        if (name === "relevant_content_cut_off") return fakeNoul(0.1);
+        if (name === "missing_evidence") return fakeChoice(MISSING, "none", 0.9);
+        return undefined;
+      });
+      const packet = await find(
+        {
+          task: "Find session persistence, subagent orchestration, and daemon lifecycle",
+          top: 3,
+        },
+        options(repo.root, adapter),
+      );
+      assert.ok(packet.results.some((result) => result.path === "src/session-store.ts"));
+      assert.ok(packet.results.some((result) => result.path === "src/subagent-runtime.ts"));
+      assert.ok(packet.results.some((result) => result.path.startsWith("src/daemon-")));
+      assert.ok(!packet.results.some((result) => result.path.startsWith("test/")));
+      assert.deepEqual(
+        packet.results.map((result) => result.rank),
+        [1, 2, 3],
+      );
+
+      const testsPacket = await find(
+        { task: "Find session persistence and subagent tests", top: 2 },
+        options(repo.root, adapter),
+      );
+      assert.ok(testsPacket.results.some((result) => result.path === "src/session-store.ts"));
+      assert.ok(testsPacket.results.some((result) => result.path === "test/subagent-orchestration.test.ts"));
     } finally {
       repo.cleanup();
     }

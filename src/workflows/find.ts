@@ -40,7 +40,7 @@ export const FIND = {
 } as const;
 
 export const FIND_POLICY = {
-  version: "find-policy@2",
+  version: "find-policy@3",
   shardSize: 20,
   acceptMetaHighMass: 0.35,
   maxExcerptCandidates: 24,
@@ -73,6 +73,41 @@ interface Candidate {
   bytes: number;
   symbols: string[];
   lexical: number;
+}
+
+const STEM_SUFFIXES = [
+  "ations",
+  "ation",
+  "itions",
+  "ition",
+  "ments",
+  "ment",
+  "ingly",
+  "ing",
+  "ers",
+  "ies",
+  "ied",
+  "ed",
+  "es",
+  "er",
+  "s",
+  "ity",
+] as const;
+
+function tokenForms(token: string): string[] {
+  const forms = [token];
+  for (const suffix of STEM_SUFFIXES) {
+    if (!token.endsWith(suffix)) continue;
+    let stem = token.slice(0, -suffix.length);
+    if (suffix === "ies" || suffix === "ied") stem += "y";
+    if (stem.length >= 4) forms.push(stem);
+    break;
+  }
+  return forms;
+}
+
+function includesToken(text: string, token: string): boolean {
+  return tokenForms(token).some((form) => text.includes(form));
 }
 
 interface MetaAnswer {
@@ -117,7 +152,74 @@ export interface FindResult {
 
 function lexicalScore(tokens: readonly string[], path: string, symbols: readonly string[]): number {
   const haystack = `${path} ${symbols.join(" ")}`.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
-  return tokens.filter((token) => haystack.includes(token)).length;
+  return tokens.filter((token) => includesToken(haystack, token)).length;
+}
+
+const FACET_STOP_WORDS = new Set([
+  "find",
+  "implementation",
+  "implementations",
+  "code",
+  "file",
+  "files",
+  "its",
+  "them",
+]);
+
+function taskFacets(task: string): string[][] {
+  const facets = task
+    .split(/\s*(?:[,;]|\b(?:and|or)\b)\s*/i)
+    .map((part) => taskTokens(part).filter((token) => !FACET_STOP_WORDS.has(token)))
+    .filter((tokens) => tokens.length > 0);
+  return facets.length > 1 ? facets.slice(0, 6) : [];
+}
+
+function diversify<T>(
+  ordered: readonly T[],
+  limit: number,
+  facets: readonly string[][],
+  candidateFor: (item: T) => Candidate,
+  priorityFor: (item: T, facet: readonly string[]) => number,
+): T[] {
+  if (ordered.length <= limit || facets.length === 0) return ordered.slice(0, limit);
+  const selected = new Set<T>();
+  for (const facet of facets) {
+    if (selected.size >= limit) break;
+    let best: { item: T; overlap: number; priority: number; index: number } | null = null;
+    for (const [index, item] of ordered.entries()) {
+      if (selected.has(item)) continue;
+      const candidate = candidateFor(item);
+      const overlap = lexicalScore(facet, candidate.path, candidate.symbols);
+      const priority = priorityFor(item, facet);
+      if (
+        overlap > 0 &&
+        (!best ||
+          priority > best.priority ||
+          (priority === best.priority && overlap > best.overlap) ||
+          (priority === best.priority && overlap === best.overlap && index < best.index))
+      ) {
+        best = { item, overlap, priority, index };
+      }
+    }
+    if (best) selected.add(best.item);
+  }
+  for (const item of ordered) {
+    if (selected.size >= limit) break;
+    selected.add(item);
+  }
+  return ordered.filter((item) => selected.has(item));
+}
+
+function facetRolePriority(result: FindResult, facet: readonly string[]): number {
+  const requestedRole = facet.some((token) => ["test", "tests", "testing", "spec", "specs"].includes(token))
+    ? "test"
+    : facet.some((token) => ["config", "configuration", "settings"].includes(token))
+      ? "config"
+      : facet.some((token) => ["doc", "docs", "documentation", "guide"].includes(token))
+        ? "docs"
+        : "implementation";
+  if (result.metadata?.role === requestedRole) return 2;
+  return requestedRole === "implementation" && result.metadata?.role === "caller" ? 1 : 0;
 }
 
 const SYMBOL =
@@ -245,25 +347,71 @@ interface Excerpt {
   text: string;
 }
 
+function occurrences(text: string, value: string): number {
+  let count = 0;
+  let offset = 0;
+  let found = text.indexOf(value, offset);
+  while (found >= 0) {
+    count++;
+    offset = found + value.length;
+    found = text.indexOf(value, offset);
+  }
+  return count;
+}
+
+function overlapsShown(start: number, end: number, shown: readonly Excerpt[]): boolean {
+  return shown.some((excerpt) => start <= excerpt.endLine && end >= excerpt.startLine);
+}
+
+function bestExcerptStart(
+  lines: readonly string[],
+  tokens: readonly string[],
+  span: number,
+  shown: readonly Excerpt[],
+): number | null {
+  const maxStart = Math.max(1, lines.length - span + 1);
+  const candidates = new Set<number>([1]);
+  for (const [index, line] of lines.entries()) {
+    const lower = line.toLowerCase();
+    if (tokens.some((token) => includesToken(lower, token))) {
+      candidates.add(Math.min(maxStart, Math.max(1, index + 1 - 20)));
+    }
+  }
+  let best: { start: number; score: number } | null = null;
+  for (const start of candidates) {
+    const end = Math.min(lines.length, start + span - 1);
+    if (overlapsShown(start, end, shown)) continue;
+    const text = lines
+      .slice(start - 1, end)
+      .join("\n")
+      .toLowerCase();
+    const score = tokens.reduce((total, token) => {
+      const count = Math.max(...tokenForms(token).map((form) => occurrences(text, form)));
+      return total + (count > 0 ? 100 + Math.min(count, 20) : 0);
+    }, 0);
+    if (!best || score > best.score || (score === best.score && start < best.start)) best = { start, score };
+  }
+  if (best) return best.start;
+  for (let start = 1; start <= lines.length; start += span) {
+    const end = Math.min(lines.length, start + span - 1);
+    if (!overlapsShown(start, end, shown)) return start;
+  }
+  return null;
+}
+
 async function readExcerpt(
   source: WorkspaceSource,
   redaction: RedactionPort,
   candidate: Candidate,
   tokens: string[],
-  after?: number,
+  shown: readonly Excerpt[] = [],
 ): Promise<Excerpt | null> {
   const file = await source.readLines(candidate.path, FIND_POLICY.maxFileBytes);
   if (!file) return null;
   const total = file.lines.length;
-  let start = 1;
-  if (after !== undefined) {
-    start = after + 1;
-    if (start > total) return null;
-  } else if (total > FIND_POLICY.wholeFileLines) {
-    const hit = file.lines.findIndex((line) => tokens.some((token) => line.toLowerCase().includes(token)));
-    start = hit < 0 ? 1 : Math.max(1, hit + 1 - 20);
-  }
-  const span = total <= FIND_POLICY.wholeFileLines && after === undefined ? total : FIND_POLICY.excerptLines;
+  const span = total <= FIND_POLICY.wholeFileLines && shown.length === 0 ? total : FIND_POLICY.excerptLines;
+  const start = bestExcerptStart(file.lines, tokens, span, shown);
+  if (start === null) return null;
   const end = Math.min(total, start + span - 1);
   const text = file.lines
     .slice(start - 1, end)
@@ -360,6 +508,7 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
   const top = Math.min(Math.max(input.top ?? 10, 1), 50);
   const maxFiles = input.maxFiles ?? 3000;
   const tokens = taskTokens(task);
+  const facets = taskFacets(task);
   const inv = await inventory(options.dependencies.source, input, tokens);
   const run = await Run.start(FIND, options, {
     taskHash: hashValue(task),
@@ -461,7 +610,13 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
         a.path.localeCompare(b.path),
     );
   const excerptLimit = Math.min(FIND_POLICY.maxExcerptCandidates, Math.max(top * 2, top));
-  const toRead = accepted.slice(0, excerptLimit);
+  const toRead = diversify(
+    accepted,
+    excerptLimit,
+    facets,
+    (candidate) => candidate,
+    (candidate, facet) => facetRolePriority(results.get(candidate.id)!, facet),
+  );
   if (accepted.length > toRead.length) {
     limits.push(
       `${accepted.length - toRead.length} accepted candidates were ranked by metadata only (excerpt limit ${excerptLimit})`,
@@ -481,10 +636,12 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
         result.error = "excerpt unreadable (binary, too large, or missing)";
         return;
       }
+      const shown: Excerpt[] = [];
       const ranges: string[] = [];
       let answer: ExcerptAnswer | null = null;
       for (let round_ = 0; round_ < 2 && excerpt; round_++) {
         const outcome = await run.judge(excerptFrame(task, candidate, excerpt, [...ranges]));
+        shown.push(excerpt);
         ranges.push(`${excerpt.startLine}-${excerpt.endLine}`);
         result.probesRun.push(round_ === 0 ? "read-excerpt@1" : "read-next-region@1");
         if (!outcome.ok) {
@@ -496,14 +653,15 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
           candidate.id,
           [excerptTexts.get(candidate.id), excerpt.text].filter(Boolean).join("\n…\n"),
         );
-        const moreExists = excerpt.endLine < excerpt.totalLines;
+        const moreExists =
+          shown.reduce((total, item) => total + item.endLine - item.startLine + 1, 0) < excerpt.totalLines;
         if (round_ === 0 && answer.cutOff >= FIND_POLICY.cutOff && moreExists) {
           excerpt = await readExcerpt(
             options.dependencies.source,
             options.dependencies.redaction,
             candidate,
             tokens,
-            excerpt.endLine,
+            shown,
           );
           continue;
         }
@@ -564,7 +722,12 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
   );
 
   const ranked = [...results.values()]
-    .filter((result) => result.relevance !== null && result.disposition !== "parked")
+    .filter(
+      (result) =>
+        result.relevance !== null &&
+        result.relevance >= FIND_POLICY.acceptMetaHighMass &&
+        result.disposition !== "parked",
+    )
     .sort(
       (a, b) =>
         (b.excerpt?.expected ?? b.metadata?.expected ?? 0) -
@@ -573,10 +736,16 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
         Number(b.excerpt !== null) - Number(a.excerpt !== null) ||
         a.path.localeCompare(b.path),
     );
-  ranked.forEach((result, index) => {
+  const candidatesById = new Map(ordered.map((candidate) => [candidate.id, candidate]));
+  const selected = diversify(
+    ranked,
+    top,
+    facets,
+    (result) => candidatesById.get(result.id)!,
+    facetRolePriority,
+  );
+  const shortlist = selected.map((result, index) => {
     result.rank = index + 1;
-  });
-  const shortlist = ranked.slice(0, top).map((result) => {
     if (input.includeExcerpts && excerptTexts.has(result.id)) {
       return {
         ...result,
@@ -610,7 +779,7 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
     ],
     results: [...shortlist, ...parkedResults, ...failedResults],
     summary: {
-      task: { tokens: tokens.slice(0, 20) },
+      task: { tokens: tokens.slice(0, 20), facets },
       tracked: inv.tracked,
       candidates: ordered.length,
       screened: screened.length,

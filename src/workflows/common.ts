@@ -1,5 +1,5 @@
 import type { JsonObject } from "../core/types.ts";
-import { contentExclusionReason } from "./classify.ts";
+import { classifyPath, contentExclusionReason } from "./classify.ts";
 import { InputError } from "./errors.ts";
 import type { DiffFile, Hunk } from "./evidence.ts";
 import { hunkText } from "./hunks.ts";
@@ -37,14 +37,70 @@ export interface DiffEvidence {
   excluded: Exclusion[];
 }
 
+const MAX_UNTRACKED_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_COMBINED_DIFF_BYTES = 32 * 1024 * 1024;
+
+function diffPath(prefix: "a" | "b", path: string): string {
+  return JSON.stringify(`${prefix}/${path}`);
+}
+
+function addedFileDiff(path: string, lines: readonly string[]): string {
+  const a = diffPath("a", path);
+  const b = diffPath("b", path);
+  return [
+    `diff --git ${a} ${b}`,
+    "new file mode 100644",
+    "--- /dev/null",
+    `+++ ${b}`,
+    ...(lines.length === 0 ? [] : [`@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)]),
+  ].join("\n");
+}
+
 export async function loadDiff(
   dependencies: Pick<WorkflowDependencies, "source" | "evidence">,
   selection: DiffSelection,
 ): Promise<DiffEvidence> {
-  const source = await dependencies.source.collectDiff(selection);
-  const files = dependencies.evidence.unifiedDiff(source.text);
-  const hunks: Hunk[] = [];
+  const collected = await dependencies.source.collectDiff(selection);
+  const untrackedDiffs: string[] = [];
   const excluded: Exclusion[] = [];
+  let diffBytes = Buffer.byteLength(collected.text);
+  for (const path of collected.untrackedFiles) {
+    const reason = contentExclusionReason(classifyPath(path));
+    if (reason) {
+      excluded.push({ id: `file:${path}`, path, reason });
+      continue;
+    }
+    const file = await dependencies.source.readLines(path, MAX_UNTRACKED_FILE_BYTES);
+    if (!file) {
+      excluded.push({
+        id: `file:${path}`,
+        path,
+        reason: `untracked file is unreadable or exceeds ${MAX_UNTRACKED_FILE_BYTES} bytes`,
+      });
+      continue;
+    }
+    const added = addedFileDiff(path, file.lines);
+    const addedBytes = Buffer.byteLength(added);
+    if (diffBytes + addedBytes > MAX_COMBINED_DIFF_BYTES) {
+      excluded.push({
+        id: `file:${path}`,
+        path,
+        reason: `combined diff exceeds ${MAX_COMBINED_DIFF_BYTES} bytes`,
+      });
+      continue;
+    }
+    untrackedDiffs.push(added);
+    diffBytes += addedBytes;
+  }
+  const text = [collected.text.trimEnd(), ...untrackedDiffs].filter(Boolean).join("\n");
+  const source: DiffSource = {
+    ...collected,
+    text,
+    probe: untrackedDiffs.length > 0 ? `${collected.probe}+untracked-files` : collected.probe,
+    untrackedFiles: [],
+  };
+  const files = dependencies.evidence.unifiedDiff(text);
+  const hunks: Hunk[] = [];
   for (const file of files) {
     const reason =
       file.status === "binary"

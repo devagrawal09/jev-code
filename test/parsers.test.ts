@@ -143,6 +143,32 @@ describe("failure log parsing", () => {
     assert.equal(go.blocks[0]!.testName, "TestDivide");
   });
 
+  test("Bun failures are named and are not duplicated by the summary", () => {
+    const parsed = parseFailureLog(
+      [
+        "bun test v1.4.0",
+        "",
+        "test/tools.test.ts:",
+        "12 | call()",
+        "TypeError: undefined is not an object",
+        "      at <anonymous> (/repo/test/tools.test.ts:12:3)",
+        "(fail) built-in tools > reads a file [1.05ms]",
+        "error: expect(received).toEqual(expected)",
+        "      at <anonymous> (/repo/test/tools.test.ts:20:3)",
+        "(fail) built-in tools > edits a file [0.68ms]",
+        "",
+        "2 tests failed:",
+        "(fail) built-in tools > reads a file [1.05ms]",
+        "(fail) built-in tools > edits a file [0.68ms]",
+      ].join("\n"),
+    );
+    assert.equal(parsed.blocks.length, 2);
+    assert.equal(parsed.blocks[0]!.testName, "built-in tools > reads a file");
+    assert.equal(parsed.blocks[0]!.message, "TypeError: undefined is not an object");
+    assert.equal(parsed.blocks[1]!.testName, "built-in tools > edits a file");
+    assert.equal(parsed.blocks[1]!.endLine, 10);
+  });
+
   test("compile errors, TAP, ANSI, and no-anchor logs", () => {
     const tsc = parseFailureLog(
       "src/a.ts(3,5): error TS2322: Type 'string' is not assignable to type 'number'.\n",

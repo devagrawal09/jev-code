@@ -192,6 +192,27 @@ describe("check: task section", () => {
       repo.cleanup();
     }
   });
+
+  test("worktree scope includes safe untracked files and excludes secret paths", async () => {
+    const repo = tempRepo({ "src/existing.ts": "export const existing = true;\n" });
+    try {
+      repo.write({
+        "src/new-feature.ts": "export function newFeature() { return true; }\n",
+        "src/new feature.ts": "export const spacedPath = true;\n",
+        ".env": "TOKEN=secret\n",
+      });
+      const packet = await check({ task: "Add the new feature module" }, options(repo.root, fake()));
+      const added = section(packet, "task").find((result) => result.path === "src/new-feature.ts");
+      assert.equal(added?.fileStatus, "added");
+      assert.ok(section(packet, "task").some((result) => result.path === "src/new feature.ts"));
+      assert.ok(packet.excluded.some((item) => item.path === ".env"));
+      assert.ok(!packet.notChecked.some((note) => note.includes("untracked")));
+      assert.equal((packet.summary.diff as { probe: string }).probe, "git-diff-U3:worktree+untracked-files");
+      assert.equal(packet.status, "complete");
+    } finally {
+      repo.cleanup();
+    }
+  });
 });
 
 const RULE_LABELS = ["not_applicable", "applicable_and_followed", "applicable_and_violated", "cannot_tell"];
