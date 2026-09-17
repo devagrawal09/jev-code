@@ -1,31 +1,7 @@
-import { AUDIT_DIFF, type AuditDiffInput, type AuditHunkResult, auditDiff } from "../workflows/audit-diff.ts";
-import {
-  CHECK_CRITERIA,
-  type CheckCriteriaInput,
-  type CriterionResult,
-  checkCriteria,
-} from "../workflows/check-criteria.ts";
-import {
-  CHECK_RULES,
-  type CheckRulesInput,
-  checkRules,
-  type RulePairResult,
-} from "../workflows/check-rules.ts";
-import { LOCATE, type LocateInput, type LocateResult, locate } from "../workflows/locate.ts";
+import { CHECK, type CheckInput, type CheckResult, check } from "../workflows/check.ts";
+import { FIND, type FindInput, type FindResult, find } from "../workflows/find.ts";
 import type { RunOptions, WorkflowInfo } from "../workflows/run.ts";
-import { type FrameAnswerResult, RUN_FRAME, runFrame } from "../workflows/run-frame.ts";
-import {
-  type CommentResult,
-  TRIAGE_COMMENTS,
-  type TriageCommentsInput,
-  triageComments,
-} from "../workflows/triage-comments.ts";
-import {
-  type FailureResult,
-  TRIAGE_FAILURES,
-  type TriageFailuresInput,
-  triageFailures,
-} from "../workflows/triage-failures.ts";
+import { TRIAGE, type TriageInput, type TriageResult, triage } from "../workflows/triage.ts";
 import type { Packet } from "../workflows/types.ts";
 import type { HumanSection } from "./output.ts";
 
@@ -39,14 +15,21 @@ export interface WorkflowDefinition<I, R> {
 const pct = (value: number | null | undefined) =>
   value === null || value === undefined ? "-" : value.toFixed(2);
 
-export const auditDiffWorkflow: WorkflowDefinition<AuditDiffInput, AuditHunkResult> = {
-  info: AUDIT_DIFF,
-  summary: "Find changes that may not match the task or may weaken tests",
-  run: auditDiff,
+/** Results of one `check` section, in report order. */
+function sectionOf<S extends CheckResult["section"]>(packet: Packet<CheckResult>, section: S) {
+  return packet.results.filter(
+    (result): result is Extract<CheckResult, { section: S }> => result.section === section,
+  );
+}
+
+export const checkWorkflow: WorkflowDefinition<CheckInput, CheckResult> = {
+  info: CHECK,
+  summary: "Check a diff against its task, and optionally project rules and acceptance criteria",
+  run: check,
   render: (packet) => [
     {
-      title: "hunks",
-      lines: packet.results
+      title: "task: hunks needing attention",
+      lines: sectionOf(packet, "task")
         .filter((result) => result.flags.length > 0 || result.error)
         .slice(0, 30)
         .map(
@@ -54,17 +37,45 @@ export const auditDiffWorkflow: WorkflowDefinition<AuditDiffInput, AuditHunkResu
             `${result.path}:${result.lines} [${result.disposition}] ${result.flags.join(",") || "-"} low=${pct(result.taskRelation?.lowMass)}${result.error ? ` (${result.error})` : ""}`,
         ),
     },
+    {
+      title: "rules: pairs needing attention",
+      lines: sectionOf(packet, "rules")
+        .filter(
+          (result) =>
+            result.verdict === "violation_flagged" || result.verdict === "uncertain" || result.error,
+        )
+        .slice(0, 30)
+        .map(
+          (result) =>
+            `${result.verdict} ${result.rule} @ ${result.path}:${result.lines}${result.error ? ` (${result.error})` : ""}`,
+        ),
+    },
+    {
+      title: "criteria",
+      lines: sectionOf(packet, "criteria").map(
+        (result) =>
+          `${result.status.padEnd(11)} ${result.text.slice(0, 100)}${result.cappedBy ? ` (capped: ${result.cappedBy})` : ""}${
+            result.evidence.length > 0
+              ? ` ← ${result.evidence
+                  .map((e) => `${e.path}:${e.lines}`)
+                  .slice(0, 3)
+                  .join(", ")}`
+              : ""
+          }`,
+      ),
+    },
   ],
 };
 
-export const triageFailuresWorkflow: WorkflowDefinition<TriageFailuresInput, FailureResult> = {
-  info: TRIAGE_FAILURES,
-  summary: "Sort test failures and show which may come from the current changes",
-  run: triageFailures,
+export const triageWorkflow: WorkflowDefinition<TriageInput, TriageResult> = {
+  info: TRIAGE,
+  summary: "Sort test failures or review comments and show which need attention",
+  run: triage,
   render: (packet) => [
     {
       title: "failures",
       lines: packet.results
+        .filter((result) => result.kind === "failures")
         .slice(0, 30)
         .flatMap((result) => [
           `${result.testName ?? result.id} (log ${result.lines}) relation=${result.relation.label} kind=${result.failureKind.label}${result.duplicateOf ? ` duplicate-of=${result.duplicateOf}` : ""}`,
@@ -72,13 +83,23 @@ export const triageFailuresWorkflow: WorkflowDefinition<TriageFailuresInput, Fai
           ...(result.wouldSettle.length > 0 ? [`    would settle: ${result.wouldSettle.join("; ")}`] : []),
         ]),
     },
+    {
+      title: "comments",
+      lines: packet.results
+        .filter((result) => result.kind === "comments")
+        .slice(0, 40)
+        .map(
+          (result) =>
+            `${result.classification.padEnd(17)} ${result.path ? `${result.path}${result.line ? `:${result.line}` : ""} ` : ""}"${result.excerpt.slice(0, 90)}"${result.duplicateOf ? ` duplicate-of=${result.duplicateOf}` : ""}`,
+        ),
+    },
   ],
 };
 
-export const locateWorkflow: WorkflowDefinition<LocateInput, LocateResult> = {
-  info: LOCATE,
+export const findWorkflow: WorkflowDefinition<FindInput, FindResult> = {
+  info: FIND,
   summary: "Find files that may be relevant to a task",
-  run: locate,
+  run: find,
   render: (packet) => [
     {
       title: "ranked candidates",
@@ -96,93 +117,14 @@ export const locateWorkflow: WorkflowDefinition<LocateInput, LocateResult> = {
   ],
 };
 
-export const checkCriteriaWorkflow: WorkflowDefinition<CheckCriteriaInput, CriterionResult> = {
-  info: CHECK_CRITERIA,
-  summary: "Show which task requirements have code or test evidence",
-  run: checkCriteria,
-  render: (packet) => [
-    {
-      title: "criteria",
-      lines: packet.results.map(
-        (result) =>
-          `${result.status.padEnd(11)} ${result.text.slice(0, 100)}${result.cappedBy ? ` (capped: ${result.cappedBy})` : ""}${
-            result.evidence.length > 0
-              ? ` ← ${result.evidence
-                  .map((e) => `${e.path}:${e.lines}`)
-                  .slice(0, 3)
-                  .join(", ")}`
-              : ""
-          }`,
-      ),
-    },
-  ],
-};
-
-export const checkRulesWorkflow: WorkflowDefinition<CheckRulesInput, RulePairResult> = {
-  info: CHECK_RULES,
-  summary: "Find changes that may break project rules",
-  run: checkRules,
-  render: (packet) => [
-    {
-      title: "rule pairs needing attention",
-      lines: packet.results
-        .filter(
-          (result) =>
-            result.verdict === "violation_flagged" || result.verdict === "uncertain" || result.error,
-        )
-        .slice(0, 30)
-        .map(
-          (result) =>
-            `${result.verdict} ${result.rule} @ ${result.path}:${result.lines}${result.error ? ` (${result.error})` : ""}`,
-        ),
-    },
-  ],
-};
-
-export const triageCommentsWorkflow: WorkflowDefinition<TriageCommentsInput, CommentResult> = {
-  info: TRIAGE_COMMENTS,
-  summary: "Show which review comments still need attention",
-  run: triageComments,
-  render: (packet) => [
-    {
-      title: "comments",
-      lines: packet.results
-        .slice(0, 40)
-        .map(
-          (result) =>
-            `${result.classification.padEnd(17)} ${result.path ? `${result.path}${result.line ? `:${result.line}` : ""} ` : ""}"${result.excerpt.slice(0, 90)}"${result.duplicateOf ? ` duplicate-of=${result.duplicateOf}` : ""}`,
-        ),
-    },
-  ],
-};
-
-export const runFrameWorkflow: WorkflowDefinition<{ file: string }, FrameAnswerResult> = {
-  info: RUN_FRAME,
-  summary: "Ask Jev your own yes/no, multiple-choice, or scoring questions",
-  run: runFrame,
-  render: (packet) => [
-    {
-      title: "answers (uncalibrated)",
-      lines: packet.results.map((result) =>
-        result.type === "noul"
-          ? `${result.question}: p=${pct(result.probability)}`
-          : result.type === "choice"
-            ? `${result.question}: ${result.choice} (confidence ${pct(result.confidence)})`
-            : `${result.question}: expected ${pct(result.expected)} (confidence ${pct(result.confidence)})`,
-      ),
-    },
-  ],
-};
-
-/** Transport-neutral registry. A CLI, MCP adapter, or hook runner can dispatch through it. */
+/**
+ * Transport-neutral registry. A CLI, MCP adapter, or hook runner can dispatch through it.
+ * Each key is the command name and must equal its workflow's `info.name`.
+ */
 export const WORKFLOWS = {
-  review: auditDiffWorkflow,
-  failures: triageFailuresWorkflow,
-  rules: checkRulesWorkflow,
-  criteria: checkCriteriaWorkflow,
-  comments: triageCommentsWorkflow,
-  find: locateWorkflow,
-  ask: runFrameWorkflow,
+  check: checkWorkflow,
+  triage: triageWorkflow,
+  find: findWorkflow,
 } as const;
 
 export type WorkflowName = keyof typeof WORKFLOWS;

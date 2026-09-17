@@ -1,17 +1,8 @@
-import { hashValue } from "../core/hash.ts";
 import { choice, noul } from "../core/questions.ts";
 import type { JsonObject } from "../core/types.ts";
 import { type ChoiceAnswer, expectKeys, readChoice, readNoul } from "../core/validation.ts";
-import {
-  boundedTask,
-  describeScope,
-  diffNotChecked,
-  hunkEvidence,
-  loadDiff,
-  sortFindings,
-  unjudgedOrFailed,
-} from "./common.ts";
-import { type FailureBlock, type Hunk, resolveStackPath } from "./evidence.ts";
+import { type DiffEvidence, hunkEvidence, type Section, unjudgedOrFailed } from "./common.ts";
+import { type FailureBlock, type Hunk, type ParsedLog, resolveStackPath } from "./evidence.ts";
 import { declaredIdentifiers } from "./hunks.ts";
 import {
   decisiveLabel,
@@ -20,27 +11,26 @@ import {
   roundedDistribution,
   untrustedInstructionQuestion,
 } from "./policy.ts";
-import type { DiffScope, WorkspaceSource } from "./ports.ts";
-import { buildFrame, Run, type RunOptions } from "./run.ts";
-import type { EvidenceRef, Finding, Packet, Parked } from "./types.ts";
+import type { WorkspaceSource } from "./ports.ts";
+import { buildFrame, type Run } from "./run.ts";
+import type { EvidenceRef, Finding, Parked } from "./types.ts";
 
-export interface TriageFailuresInput {
-  log: string;
-  logSource: string;
-  task?: string;
-  /** Diff context; `null` disables diff collection. */
-  diff?: { scope: DiffScope; base?: string } | null;
-  maxFailures?: number;
+/** The failures section of `triage`: one parsed test or CI log, judged failure by failure. */
+export interface FailuresSectionInput {
+  log: ParsedLog;
+  /** Where the log came from; shown in evidence references. */
+  source: string;
+  task: string | null;
+  maxItems: number;
+  /** Tracked paths, used to relate stack locations to the workspace. */
+  tracked: ReadonlySet<string>;
+  root: string;
+  workspace: WorkspaceSource;
 }
 
-export const TRIAGE_FAILURES = {
-  name: "failures",
-  version: 1,
-  budget: { requests: 80, inputTokens: 200_000, wallMs: 60_000 },
-} as const;
-
-export const FAILURE_POLICY = {
-  version: "failures-policy@1",
+export const TRIAGE_FAILURES_POLICY = {
+  version: "triage-failures-policy@1",
+  defaultMaxItems: 40,
   decisive: 0.6,
   causedConflict: 0.6,
   unrelatedConflict: 0.7,
@@ -219,25 +209,12 @@ function relationFrame(
   });
 }
 
-export async function triageFailures(
-  input: TriageFailuresInput,
-  options: RunOptions,
-): Promise<Packet<FailureResult>> {
-  const trimmedTask = input.task?.trim();
-  const task = trimmedTask ? boundedTask(trimmedTask) : null;
-  const maxFailures = input.maxFailures ?? 40;
-  const parsed = options.dependencies.evidence.failureLog(input.log);
-  const diff =
-    input.diff === null ? null : await loadDiff(options.dependencies, input.diff ?? { scope: "worktree" });
-  const tracked = new Set(await options.dependencies.source.trackedFiles());
-  const run = await Run.start(TRIAGE_FAILURES, options, {
-    logSource: input.logSource,
-    logHash: hashValue(input.log),
-    logLines: parsed.totalLines,
-    taskHash: task ? hashValue(task) : null,
-    diff: diff ? describeScope(diff.source) : null,
-    maxFailures,
-  });
+export function failuresSection(
+  run: Run,
+  diff: DiffEvidence | null,
+  input: FailuresSectionInput,
+): Section<FailureResult> {
+  const { log: parsed, task, maxItems: maxFailures, tracked } = input;
 
   const changedPaths = diff ? [...new Set(diff.hunks.map((hunk) => hunk.path))] : [];
   const diffSummary: JsonObject | null = diff
@@ -260,7 +237,7 @@ export async function triageFailures(
     limits.push("no failure anchors were recognized; the log format may be unsupported");
   if (parsed.blocks.length > maxFailures) {
     limits.push(
-      `only the first ${maxFailures} of ${parsed.blocks.length} failure blocks are judged (--max-failures)`,
+      `only the first ${maxFailures} of ${parsed.blocks.length} failure blocks are judged (--max-items)`,
     );
   }
   const overlong = parsed.blocks.filter((block) => block.omittedLines > 0).length;
@@ -276,7 +253,7 @@ export async function triageFailures(
   for (const [index, block] of parsed.blocks.entries()) {
     const locations = block.stackLocations.map((location) => ({
       ...location,
-      tracked: resolveStackPath(location.path, options.root, tracked),
+      tracked: resolveStackPath(location.path, input.root, tracked),
     }));
     const touched = diff
       ? locations.some((location) => location.tracked && changedPaths.includes(location.tracked))
@@ -320,7 +297,7 @@ export async function triageFailures(
         source: "deterministic",
         severity: "warn",
         lines: result.lines,
-        detail: { log: input.logSource },
+        detail: { log: input.source },
       });
     }
     if (block.envSignature) {
@@ -346,160 +323,162 @@ export async function triageFailures(
     }
     toJudge.push({ block, result });
   }
-  await run.candidates({ logSource: input.logSource, totalLines: parsed.totalLines, failures: results });
+  return { candidates: { totalLines: parsed.totalLines, failures: results }, judge };
 
-  const logRef = (block: FailureBlock): EvidenceRef => ({
-    kind: "log_window",
-    id: block.id,
-    path: input.logSource,
-    startLine: block.startLine,
-    endLine: block.endLine,
-    probe: "log-anchor-window@1",
-    truncated: block.omittedLines > 0,
-  });
-  const first = await run.judgeAll(
-    toJudge.map(({ block, result }) =>
-      relationFrame(block, task, diffSummary, result.observed, null, [logRef(block)]),
-    ),
-  );
+  async function judge() {
+    const logRef = (block: FailureBlock): EvidenceRef => ({
+      kind: "log_window",
+      id: block.id,
+      path: input.source,
+      startLine: block.startLine,
+      endLine: block.endLine,
+      probe: "log-anchor-window@1",
+      truncated: block.omittedLines > 0,
+    });
+    const first = await run.judgeAll(
+      toJudge.map(({ block, result }) =>
+        relationFrame(block, task, diffSummary, result.observed, null, [logRef(block)]),
+      ),
+    );
 
-  // One allowlisted follow-up probe per failure, chosen by code from the missing-evidence answer.
-  const outcomes = await Promise.all(
-    toJudge.map(async ({ block, result }, index) => {
-      const outcome = first[index]!;
-      if (!outcome.ok) return outcome;
-      const missing = outcome.value.missing;
-      const label = decisiveLabel(missing, FAILURE_POLICY.probeMissingEvidence);
-      const probe = await probeEvidence(label, result, diff?.hunks ?? [], options.dependencies.source);
-      if (!probe) return outcome;
-      result.probesRun.push(probe.name);
-      const followUp = await run.judge(
-        relationFrame(block, task, diffSummary, result.observed, probe.evidence, [
-          logRef(block),
-          ...probe.refs,
-        ]),
-      );
-      if (!followUp.ok) {
-        result.error = `follow-up ${followUp.reason}: ${followUp.detail}`;
-        return outcome;
+    // One allowlisted follow-up probe per failure, chosen by code from the missing-evidence answer.
+    const outcomes = await Promise.all(
+      toJudge.map(async ({ block, result }, index) => {
+        const outcome = first[index]!;
+        if (!outcome.ok) return outcome;
+        const missing = outcome.value.missing;
+        const label = decisiveLabel(missing, TRIAGE_FAILURES_POLICY.probeMissingEvidence);
+        const probe = await probeEvidence(label, result, diff?.hunks ?? [], input.workspace);
+        if (!probe) return outcome;
+        result.probesRun.push(probe.name);
+        const followUp = await run.judge(
+          relationFrame(block, task, diffSummary, result.observed, probe.evidence, [
+            logRef(block),
+            ...probe.refs,
+          ]),
+        );
+        if (!followUp.ok) {
+          result.error = `follow-up ${followUp.reason}: ${followUp.detail}`;
+          return outcome;
+        }
+        return followUp;
+      }),
+    );
+
+    for (const [index, { block, result }] of toJudge.entries()) {
+      const outcome = outcomes[index]!;
+      if (!outcome.ok) {
+        result.error = `${outcome.reason}: ${outcome.detail}`;
+        const disposition = unjudgedOrFailed(outcome.reason);
+        result.disposition = disposition;
+        run.setDisposition(block.id, disposition);
+        continue;
       }
-      return followUp;
-    }),
-  );
-
-  for (const [index, { block, result }] of toJudge.entries()) {
-    const outcome = outcomes[index]!;
-    if (!outcome.ok) {
-      result.error = `${outcome.reason}: ${outcome.detail}`;
-      const disposition = unjudgedOrFailed(outcome.reason);
-      result.disposition = disposition;
-      run.setDisposition(block.id, disposition);
-      continue;
-    }
-    const answers = outcome.value;
-    result.disposition = "judged";
-    run.setDisposition(block.id, "judged");
-    result.nondeterminismSignature = round(answers.nondeterminism);
-    result.missingEvidence = {
-      label: answers.missing.choice,
-      distribution: roundedDistribution(answers.missing.probabilities),
-    };
-    if (!block.compileError) {
-      result.failureKind = {
-        label: decisiveLabel(answers.kind, FAILURE_POLICY.decisive) ?? "uncertain",
-        determinedBy: "jev",
-        distribution: roundedDistribution(answers.kind.probabilities),
+      const answers = outcome.value;
+      result.disposition = "judged";
+      run.setDisposition(block.id, "judged");
+      result.nondeterminismSignature = round(answers.nondeterminism);
+      result.missingEvidence = {
+        label: answers.missing.choice,
+        distribution: roundedDistribution(answers.missing.probabilities),
       };
-    }
-    if (answers.relation) {
-      const caused = answers.relation.probabilities.caused_by_diff;
-      const unrelated = answers.relation.probabilities.unrelated_to_diff;
-      const distribution = roundedDistribution(answers.relation.probabilities);
-      let conflict: string | null = null;
-      if (block.envSignature && caused >= FAILURE_POLICY.causedConflict) {
-        conflict = `conflict: environment signature (${block.envSignature}) vs caused_by_diff`;
-      } else if (result.observed.stackTouchesChangedFile && unrelated >= FAILURE_POLICY.unrelatedConflict) {
-        conflict = "conflict: stack touches a changed file vs unrelated_to_diff";
-      }
-      if (conflict) {
-        result.relation = { label: "conflict", determinedBy: "code", distribution };
-        result.disposition = "parked";
-        run.setDisposition(block.id, "parked");
-        parked.push({ id: block.id, reason: conflict });
-        await run.decision(block.id, "hard_conflict", conflict, FAILURE_POLICY.version);
-      } else if (block.envSignature) {
-        result.relation = { label: "environment_or_infrastructure", determinedBy: "code", distribution };
-      } else {
-        result.relation = {
-          label: decisiveLabel(answers.relation, FAILURE_POLICY.decisive) ?? "uncertain",
+      if (!block.compileError) {
+        result.failureKind = {
+          label: decisiveLabel(answers.kind, TRIAGE_FAILURES_POLICY.decisive) ?? "uncertain",
           determinedBy: "jev",
-          distribution,
+          distribution: roundedDistribution(answers.kind.probabilities),
         };
       }
+      if (answers.relation) {
+        const caused = answers.relation.probabilities.caused_by_diff;
+        const unrelated = answers.relation.probabilities.unrelated_to_diff;
+        const distribution = roundedDistribution(answers.relation.probabilities);
+        let conflict: string | null = null;
+        if (block.envSignature && caused >= TRIAGE_FAILURES_POLICY.causedConflict) {
+          conflict = `conflict: environment signature (${block.envSignature}) vs caused_by_diff`;
+        } else if (
+          result.observed.stackTouchesChangedFile &&
+          unrelated >= TRIAGE_FAILURES_POLICY.unrelatedConflict
+        ) {
+          conflict = "conflict: stack touches a changed file vs unrelated_to_diff";
+        }
+        if (conflict) {
+          result.relation = { label: "conflict", determinedBy: "code", distribution };
+          result.disposition = "parked";
+          run.setDisposition(block.id, "parked");
+          parked.push({ id: block.id, reason: conflict });
+          await run.decision(block.id, "hard_conflict", conflict, TRIAGE_FAILURES_POLICY.version);
+        } else if (block.envSignature) {
+          result.relation = { label: "environment_or_infrastructure", determinedBy: "code", distribution };
+        } else {
+          result.relation = {
+            label: decisiveLabel(answers.relation, TRIAGE_FAILURES_POLICY.decisive) ?? "uncertain",
+            determinedBy: "jev",
+            distribution,
+          };
+        }
+      }
+      result.wouldSettle = wouldSettle(result, answers);
+      if (result.relation.label === "caused_by_diff") {
+        findings.push({
+          flag: "failure_likely_caused_by_diff",
+          id: block.id,
+          source: "jev",
+          severity: "warn",
+          lines: result.lines,
+          detail: { p: result.relation.distribution?.caused_by_diff ?? 0, test: block.testName ?? "" },
+        });
+      }
+      if (answers.nondeterminism >= TRIAGE_FAILURES_POLICY.nondeterminism) {
+        findings.push({
+          flag: "nondeterminism_signature_present",
+          id: block.id,
+          source: "jev",
+          severity: "info",
+          lines: result.lines,
+          detail: { p: round(answers.nondeterminism), note: "not a flakiness verdict; one run only" },
+        });
+      }
+      if (answers.untrusted >= TRIAGE_FAILURES_POLICY.untrusted) {
+        findings.push({
+          flag: "untrusted_instruction_text",
+          id: block.id,
+          source: "jev",
+          severity: "info",
+          lines: result.lines,
+          detail: { p: round(answers.untrusted) },
+        });
+      }
+      await run.decision(
+        block.id,
+        "failure_relation",
+        { relation: result.relation.label, kind: result.failureKind.label },
+        TRIAGE_FAILURES_POLICY.version,
+      );
     }
-    result.wouldSettle = wouldSettle(result, answers);
-    if (result.relation.label === "caused_by_diff") {
-      findings.push({
-        flag: "failure_likely_caused_by_diff",
-        id: block.id,
-        source: "jev",
-        severity: "warn",
-        lines: result.lines,
-        detail: { p: result.relation.distribution?.caused_by_diff ?? 0, test: block.testName ?? "" },
-      });
-    }
-    if (answers.nondeterminism >= FAILURE_POLICY.nondeterminism) {
-      findings.push({
-        flag: "nondeterminism_signature_present",
-        id: block.id,
-        source: "jev",
-        severity: "info",
-        lines: result.lines,
-        detail: { p: round(answers.nondeterminism), note: "not a flakiness verdict; one run only" },
-      });
-    }
-    if (answers.untrusted >= FAILURE_POLICY.untrusted) {
-      findings.push({
-        flag: "untrusted_instruction_text",
-        id: block.id,
-        source: "jev",
-        severity: "info",
-        lines: result.lines,
-        detail: { p: round(answers.untrusted) },
-      });
-    }
-    await run.decision(
-      block.id,
-      "failure_relation",
-      { relation: result.relation.label, kind: result.failureKind.label },
-      FAILURE_POLICY.version,
-    );
-  }
 
-  const families = new Map<string, number>();
-  for (const result of results) families.set(result.family, (families.get(result.family) ?? 0) + 1);
-  return run.finish({
-    findings: sortFindings(findings),
-    parked,
-    excluded: [],
-    limits,
-    notChecked: [
-      "tests were not executed or rerun",
-      "flakiness cannot be established from a single log",
-      "root causes outside recognized failure windows",
-      ...(diff ? diffNotChecked(diff.source) : ["relation to code changes (no diff context)"]),
-    ],
-    results,
-    summary: {
-      logSource: input.logSource,
-      logLines: parsed.totalLines,
-      failureBlocks: parsed.blocks.length,
-      families: families.size,
-      duplicates: results.filter((result) => result.duplicateOf).length,
-      diff: diff ? describeScope(diff.source) : null,
-    },
-    incomplete: parsed.blocks.length === 0,
-  });
+    const families = new Map<string, number>();
+    for (const result of results) families.set(result.family, (families.get(result.family) ?? 0) + 1);
+    return {
+      results,
+      findings,
+      parked,
+      limits,
+      notChecked: [
+        "tests were not executed or rerun",
+        "flakiness cannot be established from a single log",
+        "root causes outside recognized failure windows",
+        ...(diff ? [] : ["relation to code changes (no diff context)"]),
+      ],
+      summary: {
+        logLines: parsed.totalLines,
+        failureBlocks: parsed.blocks.length,
+        families: families.size,
+        duplicates: results.filter((result) => result.duplicateOf).length,
+      },
+      incomplete: parsed.blocks.length === 0,
+    };
+  }
 }
 
 function keyLines(block: FailureBlock): Array<{ n: number; text: string }> {
@@ -524,8 +503,8 @@ async function probeEvidence(
     if (!location?.tracked || !location.line) return null;
     const file = await source.readLines(location.tracked);
     if (!file) return null;
-    const start = Math.max(1, location.line - FAILURE_POLICY.probeContextLines);
-    const end = Math.min(file.lines.length, location.line + FAILURE_POLICY.probeContextLines);
+    const start = Math.max(1, location.line - TRIAGE_FAILURES_POLICY.probeContextLines);
+    const end = Math.min(file.lines.length, location.line + TRIAGE_FAILURES_POLICY.probeContextLines);
     const text = file.lines
       .slice(start - 1, end)
       .map((line, offset) => `${start + offset}| ${line}`)
@@ -574,7 +553,7 @@ function wouldSettle(result: FailureResult, answers: RelationAnswers): string[] 
     steps.add("provide a log with the complete error output");
   if (missing === "test_source") steps.add("inspect the failing test's source");
   if (missing === "changed_code") steps.add("inspect the changed code on the stack");
-  if (missing === "prior_run_history" || answers.nondeterminism >= FAILURE_POLICY.nondeterminism) {
+  if (missing === "prior_run_history" || answers.nondeterminism >= TRIAGE_FAILURES_POLICY.nondeterminism) {
     steps.add("rerun the failing test at least three times");
     steps.add("run the same test on the base commit");
   }

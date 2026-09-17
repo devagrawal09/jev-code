@@ -24,7 +24,7 @@ import type { RedactionPort, WorkspaceSource } from "./ports.ts";
 import { buildFrame, Run, type RunOptions } from "./run.ts";
 import type { EvidenceRef, Exclusion, Finding, Packet, Parked } from "./types.ts";
 
-export interface LocateInput {
+export interface FindInput {
   task: string;
   paths?: string[];
   top?: number;
@@ -32,13 +32,13 @@ export interface LocateInput {
   maxFiles?: number;
 }
 
-export const LOCATE = {
+export const FIND = {
   name: "find",
   version: 1,
   budget: { requests: 600, inputTokens: 1_200_000, wallMs: 120_000 },
 } as const;
 
-export const LOCATE_POLICY = {
+export const FIND_POLICY = {
   version: "find-policy@1",
   shardSize: 20,
   acceptMetaHighMass: 0.35,
@@ -87,7 +87,7 @@ interface ExcerptAnswer {
   untrusted: number;
 }
 
-export interface LocateResult {
+export interface FindResult {
   rank: number | null;
   id: string;
   path: string;
@@ -122,7 +122,7 @@ function lexicalScore(tokens: readonly string[], path: string, symbols: readonly
 const SYMBOL =
   /\b(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|enum|def|fn|func|struct|trait|const)\s+\*?\s*([A-Za-z_$][\w$]{2,})/g;
 
-async function inventory(source: WorkspaceSource, input: LocateInput, tokens: string[]) {
+async function inventory(source: WorkspaceSource, input: FindInput, tokens: string[]) {
   const all = await source.trackedFiles();
   const excluded: Exclusion[] = [];
   const candidates: Candidate[] = [];
@@ -144,13 +144,13 @@ async function inventory(source: WorkspaceSource, input: LocateInput, tokens: st
       continue;
     }
     const symbols: string[] = [];
-    if (bytes <= LOCATE_POLICY.maxFileBytes && kind !== "documentation") {
-      const file = await source.readLines(path, LOCATE_POLICY.maxFileBytes);
+    if (bytes <= FIND_POLICY.maxFileBytes && kind !== "documentation") {
+      const file = await source.readLines(path, FIND_POLICY.maxFileBytes);
       if (file) {
-        const head = file.lines.join("\n").slice(0, LOCATE_POLICY.symbolScanBytes);
+        const head = file.lines.join("\n").slice(0, FIND_POLICY.symbolScanBytes);
         for (const match of head.matchAll(SYMBOL)) {
           if (!symbols.includes(match[1]!)) symbols.push(match[1]!);
-          if (symbols.length >= LOCATE_POLICY.maxSymbols) break;
+          if (symbols.length >= FIND_POLICY.maxSymbols) break;
         }
       }
     }
@@ -243,19 +243,18 @@ async function readExcerpt(
   tokens: string[],
   after?: number,
 ): Promise<Excerpt | null> {
-  const file = await source.readLines(candidate.path, LOCATE_POLICY.maxFileBytes);
+  const file = await source.readLines(candidate.path, FIND_POLICY.maxFileBytes);
   if (!file) return null;
   const total = file.lines.length;
   let start = 1;
   if (after !== undefined) {
     start = after + 1;
     if (start > total) return null;
-  } else if (total > LOCATE_POLICY.wholeFileLines) {
+  } else if (total > FIND_POLICY.wholeFileLines) {
     const hit = file.lines.findIndex((line) => tokens.some((token) => line.toLowerCase().includes(token)));
     start = hit < 0 ? 1 : Math.max(1, hit + 1 - 20);
   }
-  const span =
-    total <= LOCATE_POLICY.wholeFileLines && after === undefined ? total : LOCATE_POLICY.excerptLines;
+  const span = total <= FIND_POLICY.wholeFileLines && after === undefined ? total : FIND_POLICY.excerptLines;
   const end = Math.min(total, start + span - 1);
   const text = file.lines
     .slice(start - 1, end)
@@ -334,13 +333,13 @@ function excerptFrame(task: string, candidate: Candidate, excerpt: Excerpt, prio
   });
 }
 
-export async function locate(input: LocateInput, options: RunOptions): Promise<Packet<LocateResult>> {
+export async function find(input: FindInput, options: RunOptions): Promise<Packet<FindResult>> {
   const task = requireTask(input.task);
   const top = Math.min(Math.max(input.top ?? 10, 1), 50);
   const maxFiles = input.maxFiles ?? 3000;
   const tokens = taskTokens(task);
   const inv = await inventory(options.dependencies.source, input, tokens);
-  const run = await Run.start(LOCATE, options, {
+  const run = await Run.start(FIND, options, {
     taskHash: hashValue(task),
     paths: input.paths ?? [],
     top,
@@ -363,7 +362,7 @@ export async function locate(input: LocateInput, options: RunOptions): Promise<P
       `${unscreened.length} of ${ordered.length} candidates exceeded --max-files ${maxFiles} and were not screened (lowest lexical overlap first)`,
     );
   }
-  const results = new Map<string, LocateResult>();
+  const results = new Map<string, FindResult>();
   for (const candidate of ordered) {
     results.set(candidate.id, {
       rank: null,
@@ -383,8 +382,8 @@ export async function locate(input: LocateInput, options: RunOptions): Promise<P
   await run.candidates({ tracked: inv.tracked, candidates: ordered, excluded: inv.excluded });
 
   // Round 1: metadata shards in a seeded order so position bias is not tied to path order.
-  const shuffled = seededShuffle(screened, `locate:${hashValue(task)}`);
-  const shards = shard(shuffled, LOCATE_POLICY.shardSize);
+  const shuffled = seededShuffle(screened, `find:${hashValue(task)}`);
+  const shards = shard(shuffled, FIND_POLICY.shardSize);
   const metaAnswers = new Map<string, MetaAnswer>();
   const shardRuns = await Promise.all(
     shards.map((items) =>
@@ -431,14 +430,14 @@ export async function locate(input: LocateInput, options: RunOptions): Promise<P
   // Round 2: bounded excerpts for accepted candidates only (fail open on recall).
   const accepted = screened
     .filter(
-      (candidate) => (results.get(candidate.id)?.metadata?.highMass ?? 0) >= LOCATE_POLICY.acceptMetaHighMass,
+      (candidate) => (results.get(candidate.id)?.metadata?.highMass ?? 0) >= FIND_POLICY.acceptMetaHighMass,
     )
     .sort(
       (a, b) =>
         results.get(b.id)!.metadata!.highMass - results.get(a.id)!.metadata!.highMass ||
         a.path.localeCompare(b.path),
     );
-  const excerptLimit = Math.min(LOCATE_POLICY.maxExcerptCandidates, Math.max(top * 2, top));
+  const excerptLimit = Math.min(FIND_POLICY.maxExcerptCandidates, Math.max(top * 2, top));
   const toRead = accepted.slice(0, excerptLimit);
   if (accepted.length > toRead.length) {
     limits.push(
@@ -475,7 +474,7 @@ export async function locate(input: LocateInput, options: RunOptions): Promise<P
           [excerptTexts.get(candidate.id), excerpt.text].filter(Boolean).join("\n…\n"),
         );
         const moreExists = excerpt.endLine < excerpt.totalLines;
-        if (round_ === 0 && answer.cutOff >= LOCATE_POLICY.cutOff && moreExists) {
+        if (round_ === 0 && answer.cutOff >= FIND_POLICY.cutOff && moreExists) {
           excerpt = await readExcerpt(
             options.dependencies.source,
             options.dependencies.redaction,
@@ -495,14 +494,14 @@ export async function locate(input: LocateInput, options: RunOptions): Promise<P
         expected: round(answer.relevance.score),
         targetDefinitionVisible: round(answer.targetVisible),
         relevantContentCutOff: round(answer.cutOff),
-        missingEvidence: decisiveLabel(answer.missing, LOCATE_POLICY.missingEvidence) ?? "uncertain",
+        missingEvidence: decisiveLabel(answer.missing, FIND_POLICY.missingEvidence) ?? "uncertain",
       };
       result.relevance = highMass;
       const meta = metaAnswers.get(candidate.id);
       if (
         meta &&
-        highMass >= LOCATE_POLICY.conflictHighMass &&
-        meta.role.probabilities.unrelated >= LOCATE_POLICY.conflictUnrelated
+        highMass >= FIND_POLICY.conflictHighMass &&
+        meta.role.probabilities.unrelated >= FIND_POLICY.conflictUnrelated
       ) {
         result.disposition = "parked";
         run.setDisposition(candidate.id, "parked");
@@ -514,7 +513,7 @@ export async function locate(input: LocateInput, options: RunOptions): Promise<P
       }
       const missing = result.excerpt.missingEvidence;
       if (
-        highMass >= LOCATE_POLICY.strongHighMass &&
+        highMass >= FIND_POLICY.strongHighMass &&
         missing !== "none" &&
         missing !== "uncertain" &&
         missing !== "cannot_tell"
@@ -536,7 +535,7 @@ export async function locate(input: LocateInput, options: RunOptions): Promise<P
         candidate.id,
         "candidate_excerpt",
         result.excerpt as unknown as JsonObject,
-        LOCATE_POLICY.version,
+        FIND_POLICY.version,
       );
     }),
   );
@@ -563,7 +562,7 @@ export async function locate(input: LocateInput, options: RunOptions): Promise<P
     }
     return result;
   });
-  const noStrongCandidate = !ranked.some((result) => (result.relevance ?? 0) >= LOCATE_POLICY.strongHighMass);
+  const noStrongCandidate = !ranked.some((result) => (result.relevance ?? 0) >= FIND_POLICY.strongHighMass);
   if (noStrongCandidate && run.coverage().judged > 0) {
     findings.push({
       flag: "no_strong_candidate",

@@ -1,7 +1,7 @@
 {
   "name": "jev-code",
   "version": "0.1.0",
-  "description": "Experimental judgment tools that coding agents can delegate common tasks to. Review changes, understand failures, check rules and requirements, find relevant code, and more.",
+  "description": "Experimental judgment tools that coding agents can delegate common tasks to. Check changes against the task, rules and requirements, triage failures and review comments, and find relevant code.",
   "license": "MIT",
   "author": "Dev Agrawal",
   "repository": {

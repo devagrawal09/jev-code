@@ -13,6 +13,7 @@ import { WORKFLOWS, type WorkflowDefinition, type WorkflowName } from "./cli/reg
 import type { JevPort } from "./core/types.ts";
 import { InputError } from "./workflows/errors.ts";
 import type { RunOptions } from "./workflows/run.ts";
+import { TRIAGE_KINDS } from "./workflows/triage.ts";
 import { DEFAULT_MODEL, type Packet } from "./workflows/types.ts";
 
 export interface CliIO {
@@ -41,32 +42,25 @@ const DIFF_OPTIONS = { scope: { type: "string" }, base: { type: "string" } } as 
 const TASK_OPTIONS = { task: { type: "string" }, "task-file": { type: "string" } } as const;
 
 const COMMAND_OPTIONS = {
-  review: {
+  check: {
     ...TASK_OPTIONS,
     ...DIFF_OPTIONS,
     "task-source": { type: "string" },
-    "max-hunks": { type: "string" },
-  },
-  failures: {
-    ...TASK_OPTIONS,
-    ...DIFF_OPTIONS,
-    log: { type: "string" },
-    "no-diff": { type: "boolean" },
-    "max-failures": { type: "string" },
-  },
-  rules: { ...DIFF_OPTIONS, rules: { type: "string" }, "max-pairs": { type: "string" } },
-  criteria: {
-    ...DIFF_OPTIONS,
+    rules: { type: "string" },
     criteria: { type: "string" },
     "criteria-file": { type: "string" },
     "test-results": { type: "string" },
+    "max-hunks": { type: "string" },
+    "max-pairs": { type: "string" },
     "max-evidence": { type: "string" },
   },
-  comments: {
+  triage: {
+    ...TASK_OPTIONS,
     ...DIFF_OPTIONS,
-    comments: { type: "string" },
+    kind: { type: "string" },
+    input: { type: "string" },
     "no-diff": { type: "boolean" },
-    "max-comments": { type: "string" },
+    "max-items": { type: "string" },
   },
   find: {
     ...TASK_OPTIONS,
@@ -75,21 +69,27 @@ const COMMAND_OPTIONS = {
     excerpts: { type: "boolean" },
     "max-files": { type: "string" },
   },
-  ask: { file: { type: "string" } },
 } as const;
 
 const COMMAND_USAGE: Record<WorkflowName, string> = {
-  review:
-    "jev-code review --task <text> | --task-file <path> [--task-source user|issue|agent] [--scope worktree|staged|branch] [--base <ref>] [--max-hunks N]",
-  failures:
-    "jev-code failures --log <path|-> [--task <text> | --task-file <path>] [--scope ...] [--base <ref>] [--no-diff] [--max-failures N]",
-  rules: "jev-code rules --rules <path> [--scope ...] [--base <ref>] [--max-pairs N]",
-  criteria:
-    "jev-code criteria --criteria <text> | --criteria-file <path|-> [--test-results <json|junit path>] [--scope ...] [--base <ref>] [--max-evidence N]",
-  comments:
-    "jev-code comments --comments <path|-> [--scope ...] [--base <ref>] [--no-diff] [--max-comments N]",
+  check:
+    "jev-code check --task <text> | --task-file <path|-> [--task-source user|issue|agent] [--rules <path>] [--criteria <text> | --criteria-file <path|->] [--test-results <json|junit path>] [--scope worktree|staged|branch] [--base <ref>] [--max-hunks N] [--max-pairs N] [--max-evidence N]",
+  triage:
+    "jev-code triage --kind failures|comments --input <path|-> [--task <text> | --task-file <path>] [--scope worktree|staged|branch] [--base <ref>] [--no-diff] [--max-items N]",
   find: 'jev-code find "<task>" | --task <text> | --task-file <path> [--paths <glob>]... [--top N] [--excerpts] [--max-files N]',
-  ask: "jev-code ask --file <workspace-relative frame.json>",
+};
+
+const COMMAND_NOTES: Record<WorkflowName, string[]> = {
+  check: [
+    "The task is required. Rules, criteria, and test results are optional and add sections to the same report.",
+    "--rules is a JSON rules file. Criteria are a numbered or bulleted list. --test-results needs criteria.",
+    'Inline criteria that start with "-" must be written as --criteria="- item"; numbered lists need no special form.',
+  ],
+  triage: [
+    "--kind failures reads a test or CI log. --kind comments reads exported review comments as JSON.",
+    "--task is context for failures only. --max-items defaults to 40 failures or 100 comment threads.",
+  ],
+  find: [],
 };
 
 function version(): string {
@@ -180,8 +180,9 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
     });
     const v = values as Record<string, string | boolean | string[] | undefined>;
     if (v.help) {
+      const notes = COMMAND_NOTES[name].map((note) => `${note}\n`).join("");
       io.stdout.write(
-        `${WORKFLOWS[name].summary}\n\nUsage: ${COMMAND_USAGE[name]}\n\nExperimental: this command and its report may change.\n\nRun "jev-code --help" for global options.\n`,
+        `${WORKFLOWS[name].summary}\n\nUsage: ${COMMAND_USAGE[name]}\n\n${notes}${notes ? "\n" : ""}Experimental: this command and its report may change.\n\nRun "jev-code --help" for global options.\n`,
       );
       return EXIT.ok;
     }
@@ -233,36 +234,66 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
 
     let packet: Packet<unknown>;
     switch (name) {
-      case "review": {
+      case "check": {
+        if (typeof v.criteria === "string" && typeof v["criteria-file"] === "string") {
+          throw new UsageError("use either --criteria or --criteria-file, not both");
+        }
+        if (v.rules === "-") throw new UsageError("--rules must be an explicit file, not stdin");
+        const hasCriteria = typeof v.criteria === "string" || typeof v["criteria-file"] === "string";
+        if (typeof v["test-results"] === "string" && !hasCriteria) {
+          throw new UsageError("--test-results needs --criteria or --criteria-file");
+        }
         const taskSource = enumValue(v["task-source"] as string | undefined, "task-source", [
           "user",
           "issue",
           "agent",
         ] as const);
         const maxHunks = integer(v["max-hunks"] as string | undefined, "max-hunks", 1, 2000);
+        const maxPairs = integer(v["max-pairs"] as string | undefined, "max-pairs", 1, 5000);
+        const maxEvidence = integer(v["max-evidence"] as string | undefined, "max-evidence", 1, 1000);
+        const task = (await readTask(true))!;
+        const rules = typeof v.rules === "string" ? await readInput(v.rules, "rules", 512 * 1024) : null;
+        const criteria =
+          typeof v.criteria === "string"
+            ? { text: v.criteria, source: "argument" }
+            : typeof v["criteria-file"] === "string"
+              ? await readInput(v["criteria-file"], "criteria")
+              : null;
+        const testResults =
+          typeof v["test-results"] === "string" ? await readInput(v["test-results"], "test results") : null;
         packet = await WORKFLOWS[name].run(
           {
-            task: (await readTask(true))!,
+            task,
+            rules,
+            criteria,
+            testResults,
             ...diffSelection(),
             ...(taskSource ? { taskSource } : {}),
             ...(maxHunks ? { maxHunks } : {}),
+            ...(maxPairs ? { maxPairs } : {}),
+            ...(maxEvidence ? { maxEvidenceUnits: maxEvidence } : {}),
           },
           options,
         );
         break;
       }
-      case "failures": {
-        if (typeof v.log !== "string") throw new UsageError("--log <path|-> is required");
-        const log = await readInput(v.log, "log");
+      case "triage": {
+        const kind = enumValue(v.kind as string | undefined, "kind", TRIAGE_KINDS);
+        if (!kind) throw new UsageError(`--kind ${TRIAGE_KINDS.join("|")} is required`);
+        if (typeof v.input !== "string") throw new UsageError("--input <path|-> is required");
+        const hasTask = typeof v.task === "string" || typeof v["task-file"] === "string";
+        if (hasTask && kind !== "failures") throw new UsageError("--task is only used with --kind failures");
+        const maxItems = integer(v["max-items"] as string | undefined, "max-items", 1, 1000);
+        const input = await readInput(v.input, kind === "failures" ? "log" : "comments");
         const task = await readTask(false);
-        const maxFailures = integer(v["max-failures"] as string | undefined, "max-failures", 1, 500);
         packet = await WORKFLOWS[name].run(
           {
-            log: log.text,
-            logSource: log.source,
+            kind,
+            text: input.text,
+            source: input.source,
             ...(task ? { task } : {}),
             diff: v["no-diff"] ? null : diffSelection(),
-            ...(maxFailures ? { maxFailures } : {}),
+            ...(maxItems ? { maxItems } : {}),
           },
           options,
         );
@@ -289,66 +320,6 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
         );
         break;
       }
-      case "criteria": {
-        if ((typeof v.criteria === "string") === (typeof v["criteria-file"] === "string")) {
-          throw new UsageError("supply exactly one of --criteria or --criteria-file");
-        }
-        const criteria =
-          typeof v.criteria === "string"
-            ? { text: v.criteria, source: "argument" }
-            : await readInput(v["criteria-file"] as string, "criteria");
-        const testResults =
-          typeof v["test-results"] === "string" ? await readInput(v["test-results"], "test results") : null;
-        const maxEvidence = integer(v["max-evidence"] as string | undefined, "max-evidence", 1, 1000);
-        packet = await WORKFLOWS[name].run(
-          {
-            criteria: criteria.text,
-            criteriaSource: criteria.source,
-            testResults,
-            ...diffSelection(),
-            ...(maxEvidence ? { maxEvidenceUnits: maxEvidence } : {}),
-          },
-          options,
-        );
-        break;
-      }
-      case "rules": {
-        if (typeof v.rules !== "string" || v.rules === "-")
-          throw new UsageError("--rules <path> (an explicit file) is required");
-        const rules = await readInput(v.rules, "rules", 512 * 1024);
-        const maxPairs = integer(v["max-pairs"] as string | undefined, "max-pairs", 1, 5000);
-        packet = await WORKFLOWS[name].run(
-          {
-            rules: rules.text,
-            rulesSource: rules.source,
-            ...diffSelection(),
-            ...(maxPairs ? { maxPairs } : {}),
-          },
-          options,
-        );
-        break;
-      }
-      case "comments": {
-        if (typeof v.comments !== "string") throw new UsageError("--comments <path|-> is required");
-        const comments = await readInput(v.comments, "comments");
-        const maxComments = integer(v["max-comments"] as string | undefined, "max-comments", 1, 1000);
-        packet = await WORKFLOWS[name].run(
-          {
-            comments: comments.text,
-            commentsSource: comments.source,
-            diff: v["no-diff"] ? null : diffSelection(),
-            ...(maxComments ? { maxComments } : {}),
-          },
-          options,
-        );
-        break;
-      }
-      case "ask": {
-        if (typeof v.file !== "string" || v.file === "-")
-          throw new UsageError("--file <workspace-relative path> is required");
-        packet = await WORKFLOWS[name].run({ file: v.file }, options);
-        break;
-      }
     }
     if (v.json) io.stdout.write(`${JSON.stringify(packet, null, 2)}\n`);
     else {
@@ -358,10 +329,9 @@ export async function runCli(argv: string[], io: CliIO, deps: { adapter?: JevPor
     return exitCodeFor(packet);
   } catch (error) {
     const usage =
-      error instanceof UsageError ||
-      error instanceof MissingCredentialError ||
-      (error as { code?: string }).code?.startsWith("ERR_PARSE_ARGS");
-    const input = error instanceof InputError || error instanceof GitError;
+      error instanceof UsageError || (error as { code?: string }).code?.startsWith("ERR_PARSE_ARGS");
+    const input =
+      error instanceof MissingCredentialError || error instanceof InputError || error instanceof GitError;
     const code = usage ? EXIT.usage : input ? EXIT.input : EXIT.internal;
     const kind = usage ? "usage" : input ? "input" : "internal";
     const message = safeMessage(error);

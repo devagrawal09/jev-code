@@ -5,7 +5,29 @@ import type { DiffFile, Hunk } from "./evidence.ts";
 import { hunkText } from "./hunks.ts";
 import type { DiffSelection, DiffSource, WorkflowDependencies } from "./ports.ts";
 import type { FailureReason } from "./run.ts";
-import type { EvidenceRef, Exclusion, Finding } from "./types.ts";
+import type { EvidenceRef, Exclusion, Finding, Parked } from "./types.ts";
+
+/** What one section contributes to its workflow's single packet. */
+export interface SectionReport<R> {
+  results: R[];
+  findings: Finding[];
+  parked: Parked[];
+  excluded?: Exclusion[];
+  limits: string[];
+  notChecked: string[];
+  summary: JsonObject;
+  incomplete?: boolean;
+}
+
+/**
+ * One part of a workflow. A section never starts a run or loads a diff: the workflow owns both and
+ * hands them in. Planning is finished (dispositions set, candidates known) before anything is judged.
+ */
+export interface Section<R> {
+  /** Recorded in candidates.json before any judgment. */
+  candidates: Record<string, unknown>;
+  judge(): Promise<SectionReport<R>>;
+}
 
 export interface DiffEvidence {
   source: DiffSource;

@@ -1,4 +1,6 @@
-/** Smoke test the built CLI with a deterministic test Jev. No network calls are made. */
+/**
+ * Smoke test the built CLI with a deterministic test Jev. No network calls are made.
+ */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,7 +22,7 @@ const write = (path: string, text: string) => {
 };
 const adapter = createFakeAdapter();
 
-async function invoke(args: string[], withAdapter = true) {
+async function invoke(args: string[]) {
   let stdout = "";
   let stderr = "";
   const code = await built.runCli(
@@ -32,7 +34,7 @@ async function invoke(args: string[], withAdapter = true) {
       cwd: root,
       env: {},
     },
-    withAdapter ? { adapter } : {},
+    { adapter },
   );
   return { code, stdout, stderr };
 }
@@ -58,6 +60,7 @@ try {
     "FAIL test/math.test.js\n  adds\n    Expected: 3\n    Received: 4\n      at test/math.test.js:3:20\n",
   );
   write("criteria.md", "- add returns the sum\n- add handles overflow\n");
+  write("junit.xml", '<testsuite><testcase classname="math" name="add returns the sum"/></testsuite>');
   write(
     "rules.json",
     JSON.stringify({
@@ -71,55 +74,72 @@ try {
     "comments.json",
     JSON.stringify([{ id: 1, body: "This returns 42 for 41, why?", path: "src/math.js", line: 2 }]),
   );
-  write(
-    "frame.json",
-    JSON.stringify({
-      version: 1,
-      scope: "smoke",
-      state: { note: "hello" },
-      questions: { greeting: { type: "noul", instructions: "Is this a greeting?" } },
-    }),
-  );
-
-  const cases: Array<{ args: string[]; expect: number; json?: boolean; adapter?: boolean; error?: RegExp }> =
-    [
-      { args: ["--help"], expect: 0 },
-      { args: ["review", "--help"], expect: 0 },
-      { args: ["review"], expect: 64 },
-      { args: ["review", "--task", "fix add overflow", "--json"], expect: 0, json: true },
-      { args: ["failures", "--log", "ci.txt", "--json"], expect: 0, json: true },
-      { args: ["find", "where is add implemented", "--json"], expect: 0, json: true },
-      { args: ["criteria", "--criteria-file", "criteria.md", "--json"], expect: 0, json: true },
-      { args: ["rules", "--rules", "rules.json", "--json"], expect: 0, json: true },
-      { args: ["comments", "--comments", "comments.json", "--json"], expect: 0, json: true },
-      { args: ["ask", "--file", "frame.json", "--json"], expect: 0, json: true },
-      { args: ["ask", "--file", "../outside.json"], expect: 65 },
-      { args: ["review", "--task", "x", "--offline"], expect: 64 },
-      {
-        args: ["review", "--task", "x"],
-        expect: 64,
-        adapter: false,
-        error: /TYPESAFE_API_KEY is required/,
-      },
-    ];
+  const cases: Array<{
+    args: string[];
+    expect: number;
+    json?: boolean;
+    error?: RegExp;
+    sections?: string[];
+  }> = [
+    { args: ["--help"], expect: 0 },
+    { args: ["check", "--help"], expect: 0 },
+    { args: ["triage", "--help"], expect: 0 },
+    { args: ["find", "--help"], expect: 0 },
+    { args: ["check"], expect: 64 },
+    { args: ["check", "--task", "fix add overflow", "--json"], expect: 0, json: true },
+    {
+      args: [
+        "check",
+        "--task",
+        "fix add overflow",
+        "--rules",
+        "rules.json",
+        "--criteria-file",
+        "criteria.md",
+        "--test-results",
+        "junit.xml",
+        "--json",
+      ],
+      expect: 0,
+      json: true,
+      sections: ["task", "rules", "criteria"],
+    },
+    { args: ["check", "--task", "x", "--test-results", "junit.xml"], expect: 64 },
+    { args: ["triage", "--kind", "failures", "--input", "ci.txt", "--json"], expect: 0, json: true },
+    { args: ["triage", "--kind", "comments", "--input", "comments.json", "--json"], expect: 0, json: true },
+    { args: ["triage", "--input", "ci.txt"], expect: 64 },
+    { args: ["triage", "--kind", "failures", "--input", "../outside.log"], expect: 65 },
+    { args: ["find", "where is add implemented", "--json"], expect: 0, json: true },
+    // Removed commands have no aliases.
+    ...["review", "rules", "criteria", "failures", "comments", "ask"].map((removed) => ({
+      args: [removed, "--help"],
+      expect: 64,
+      error: /unknown command/,
+    })),
+    { args: ["check", "--task", "x", "--offline"], expect: 64 },
+  ];
 
   let failures = 0;
   for (const test of cases) {
-    const result = await invoke(test.args, test.adapter !== false);
+    const result = await invoke(test.args);
     let ok = result.code === test.expect && (!test.error || test.error.test(result.stderr));
     let note = "";
     if (ok && test.json) {
       try {
         const packet = JSON.parse(result.stdout) as {
           schema?: string;
+          workflow?: string;
           advisory?: boolean;
           notChecked?: unknown[];
+          summary?: { sections?: string[] };
         };
         ok =
           packet.schema === "jev-code.packet/v1" &&
+          packet.workflow === `${test.args[0]}@1` &&
           packet.advisory === true &&
           Array.isArray(packet.notChecked) &&
-          packet.notChecked.length > 0;
+          packet.notChecked.length > 0 &&
+          (!test.sections || JSON.stringify(packet.summary?.sections) === JSON.stringify(test.sections));
         if (!ok) note = " (packet shape)";
       } catch {
         ok = false;

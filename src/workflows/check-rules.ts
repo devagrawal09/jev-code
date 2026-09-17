@@ -3,22 +3,13 @@ import { choice } from "../core/questions.ts";
 import type { JsonValue } from "../core/types.ts";
 import { type ChoiceAnswer, expectKeys, readChoice } from "../core/validation.ts";
 import { matchesAnyGlob } from "./classify.ts";
-import {
-  describeScope,
-  diffNotChecked,
-  hunkEvidence,
-  hunkRef,
-  loadDiff,
-  sortFindings,
-  unjudgedOrFailed,
-} from "./common.ts";
+import { type DiffEvidence, hunkEvidence, hunkRef, type Section, unjudgedOrFailed } from "./common.ts";
 import { InputError } from "./errors.ts";
 import type { Hunk } from "./evidence.ts";
 import { ladderForHunk, lineRange } from "./hunks.ts";
 import { EVIDENCE_POLICY, round, roundedDistribution } from "./policy.ts";
-import type { DiffScope } from "./ports.ts";
-import { buildFrame, Run, type RunOptions } from "./run.ts";
-import type { Finding, Packet, Parked } from "./types.ts";
+import { buildFrame, type Run } from "./run.ts";
+import type { Finding, Parked } from "./types.ts";
 
 export const RULE_LABELS = [
   "not_applicable",
@@ -44,22 +35,15 @@ export interface Rule {
   examples: RuleExample[];
 }
 
-export interface CheckRulesInput {
-  rules: string;
-  rulesSource: string;
-  scope?: DiffScope;
-  base?: string;
-  maxPairs?: number;
+/** The rules section of `check`: semantic project rules judged against every in-scope hunk. */
+export interface RulesSectionInput {
+  rules: readonly Rule[];
+  maxPairs: number;
 }
 
-export const CHECK_RULES = {
-  name: "rules",
-  version: 1,
-  budget: { requests: 120, inputTokens: 200_000, wallMs: 60_000 },
-} as const;
-
-export const RULES_POLICY = {
-  version: "rules-policy@1",
+export const CHECK_RULES_POLICY = {
+  version: "check-rules-policy@1",
+  defaultMaxPairs: 400,
   maxRules: 50,
   rulesPerRequest: 12,
   violated: 0.7,
@@ -83,8 +67,10 @@ export function parseRules(text: string): Rule[] {
     throw new InputError('rules file must look like { "version": 1, "rules": [...] }');
   }
   if (root.rules.length === 0) throw new InputError("rules file has no rules");
-  if (root.rules.length > RULES_POLICY.maxRules) {
-    throw new InputError(`rules file has ${root.rules.length} rules; the limit is ${RULES_POLICY.maxRules}`);
+  if (root.rules.length > CHECK_RULES_POLICY.maxRules) {
+    throw new InputError(
+      `rules file has ${root.rules.length} rules; the limit is ${CHECK_RULES_POLICY.maxRules}`,
+    );
   }
   const ids = new Set<string>();
   return root.rules.map((raw, index) => {
@@ -203,27 +189,16 @@ export interface RulePairResult {
   error: string | null;
 }
 
-export async function checkRules(
-  input: CheckRulesInput,
-  options: RunOptions,
-): Promise<Packet<RulePairResult>> {
-  const rules = parseRules(input.rules);
+export function rulesSection(
+  run: Run,
+  diff: DiffEvidence,
+  input: RulesSectionInput,
+): Section<RulePairResult> {
+  const { rules, maxPairs } = input;
   const semantic = rules.filter((rule) => rule.class === "semantic");
-  const maxPairs = input.maxPairs ?? 400;
-  const diff = await loadDiff(options.dependencies, {
-    scope: input.scope ?? "worktree",
-    ...(input.base ? { base: input.base } : {}),
-  });
-  const run = await Run.start(CHECK_RULES, options, {
-    rulesSource: input.rulesSource,
-    rulesHash: hashValue(rules),
-    diff: describeScope(diff.source),
-    maxPairs,
-  });
   const limits: string[] = [];
   const findings: Finding[] = [];
   const parked: Parked[] = [];
-  for (const item of diff.excluded) run.setDisposition(item.id, "excluded");
   for (const rule of semantic) {
     if (!examplesBalanced(rule.examples))
       limits.push(`rule ${rule.id} has unbalanced examples; calibration is weaker`);
@@ -263,103 +238,104 @@ export async function checkRules(
       pairCount++;
       eligible.push(rule);
     }
-    for (let index = 0; index < eligible.length; index += RULES_POLICY.rulesPerRequest) {
-      jobs.push({ hunk, rules: eligible.slice(index, index + RULES_POLICY.rulesPerRequest) });
+    for (let index = 0; index < eligible.length; index += CHECK_RULES_POLICY.rulesPerRequest) {
+      jobs.push({ hunk, rules: eligible.slice(index, index + CHECK_RULES_POLICY.rulesPerRequest) });
     }
   }
   if (results.length > maxPairs)
     limits.push(`only ${maxPairs} of ${results.length} rule-hunk pairs were judged (--max-pairs)`);
-  await run.candidates({ rules, pairs: results.map((result) => result.id) });
+  return { candidates: { rules, pairs: results.map((result) => result.id) }, judge };
 
-  const outcomes = await run.judgeAll(
-    jobs.map((job) => complianceFrame(job.hunk, job.rules, hunkRef(job.hunk, diff.source))),
-  );
-  const byId = new Map(results.map((result) => [result.id, result]));
-  for (const [index, job] of jobs.entries()) {
-    const outcome = outcomes[index]!;
-    for (const rule of job.rules) {
-      const result = byId.get(`${job.hunk.id}:${rule.id}`)!;
-      if (!outcome.ok) {
-        result.error = `${outcome.reason}: ${outcome.detail}`;
-        const disposition = unjudgedOrFailed(outcome.reason);
-        result.disposition = disposition;
-        run.setDisposition(result.id, disposition);
-        continue;
+  async function judge() {
+    const outcomes = await run.judgeAll(
+      jobs.map((job) => complianceFrame(job.hunk, job.rules, hunkRef(job.hunk, diff.source))),
+    );
+    const byId = new Map(results.map((result) => [result.id, result]));
+    for (const [index, job] of jobs.entries()) {
+      const outcome = outcomes[index]!;
+      for (const rule of job.rules) {
+        const result = byId.get(`${job.hunk.id}:${rule.id}`)!;
+        if (!outcome.ok) {
+          result.error = `${outcome.reason}: ${outcome.detail}`;
+          const disposition = unjudgedOrFailed(outcome.reason);
+          result.disposition = disposition;
+          run.setDisposition(result.id, disposition);
+          continue;
+        }
+        const answer = outcome.value.get(rule.id)!;
+        const violated = answer.probabilities.applicable_and_violated;
+        result.distribution = roundedDistribution(answer.probabilities);
+        result.confidence = round(answer.confidence);
+        result.disposition = "judged";
+        run.setDisposition(result.id, "judged");
+        if (violated >= CHECK_RULES_POLICY.violated && answer.confidence >= CHECK_RULES_POLICY.confidence) {
+          result.verdict = "violation_flagged";
+          findings.push({
+            flag: "rule_violation",
+            id: result.id,
+            source: "jev",
+            severity: "warn",
+            path: result.path,
+            lines: result.lines,
+            detail: { rule: rule.id, p: round(violated), confidence: round(answer.confidence) },
+          });
+        } else if (
+          violated >= CHECK_RULES_POLICY.parkLow ||
+          answer.probabilities.cannot_tell >= CHECK_RULES_POLICY.cannotTell
+        ) {
+          result.verdict = "uncertain";
+          result.disposition = "parked";
+          run.setDisposition(result.id, "parked");
+          parked.push({
+            id: result.id,
+            path: result.path,
+            reason:
+              violated >= CHECK_RULES_POLICY.parkLow
+                ? `rule ${rule.id}: violation probability ${round(violated)} is in the uncertain band`
+                : `rule ${rule.id}: cannot_tell`,
+          });
+        } else {
+          result.verdict = answer.choice === "not_applicable" ? "not_applicable" : "no_violation_flagged";
+        }
+        await run.decision(
+          result.id,
+          "rule_compliance",
+          { verdict: result.verdict, violated: round(violated) },
+          CHECK_RULES_POLICY.version,
+        );
       }
-      const answer = outcome.value.get(rule.id)!;
-      const violated = answer.probabilities.applicable_and_violated;
-      result.distribution = roundedDistribution(answer.probabilities);
-      result.confidence = round(answer.confidence);
-      result.disposition = "judged";
-      run.setDisposition(result.id, "judged");
-      if (violated >= RULES_POLICY.violated && answer.confidence >= RULES_POLICY.confidence) {
-        result.verdict = "violation_flagged";
-        findings.push({
-          flag: "rule_violation",
-          id: result.id,
-          source: "jev",
-          severity: "warn",
-          path: result.path,
-          lines: result.lines,
-          detail: { rule: rule.id, p: round(violated), confidence: round(answer.confidence) },
-        });
-      } else if (
-        violated >= RULES_POLICY.parkLow ||
-        answer.probabilities.cannot_tell >= RULES_POLICY.cannotTell
-      ) {
-        result.verdict = "uncertain";
-        result.disposition = "parked";
-        run.setDisposition(result.id, "parked");
-        parked.push({
-          id: result.id,
-          path: result.path,
-          reason:
-            violated >= RULES_POLICY.parkLow
-              ? `rule ${rule.id}: violation probability ${round(violated)} is in the uncertain band`
-              : `rule ${rule.id}: cannot_tell`,
-        });
-      } else {
-        result.verdict = answer.choice === "not_applicable" ? "not_applicable" : "no_violation_flagged";
-      }
-      await run.decision(
-        result.id,
-        "rule_compliance",
-        { verdict: result.verdict, violated: round(violated) },
-        RULES_POLICY.version,
-      );
     }
-  }
 
-  const skippedRules = rules.filter((rule) => rule.class !== "semantic");
-  return run.finish({
-    findings: sortFindings(findings),
-    parked,
-    excluded: diff.excluded,
-    limits,
-    notChecked: [
-      "no statement of compliance is made; unflagged pairs are not approvals",
-      "recall of violations is not claimed",
-      ...(skippedRules.length > 0
-        ? [
-            `${skippedRules.length} deterministic/process rule(s) belong to linters or humans: ${skippedRules.map((rule) => rule.id).join(", ")}`,
-          ]
-        : []),
-      ...(skippedHunks > 0 ? [`${skippedHunks} lockfile, generated, or formatting-only hunk(s)`] : []),
-      "code outside the diff",
-      ...diffNotChecked(diff.source),
-    ],
-    results: results.sort(
-      (a, b) => verdictOrder(a.verdict) - verdictOrder(b.verdict) || a.path.localeCompare(b.path),
-    ),
-    summary: {
-      rules: rules.length,
-      semanticRules: semantic.length,
-      pairs: results.length,
-      requests: jobs.length,
-      violationsFlagged: findings.filter((finding) => finding.flag === "rule_violation").length,
-      diff: describeScope(diff.source),
-    },
-  });
+    const skippedRules = rules.filter((rule) => rule.class !== "semantic");
+    return {
+      results: results.sort(
+        (a, b) => verdictOrder(a.verdict) - verdictOrder(b.verdict) || a.path.localeCompare(b.path),
+      ),
+      findings,
+      parked,
+      limits,
+      notChecked: [
+        "no statement of rule compliance is made; unflagged rule-hunk pairs are not approvals",
+        "recall of rule violations is not claimed",
+        ...(skippedRules.length > 0
+          ? [
+              `${skippedRules.length} deterministic/process rule(s) belong to linters or humans: ${skippedRules.map((rule) => rule.id).join(", ")}`,
+            ]
+          : []),
+        ...(skippedHunks > 0
+          ? [`rules were not applied to ${skippedHunks} lockfile, generated, or formatting-only hunk(s)`]
+          : []),
+        "code outside the diff",
+      ],
+      summary: {
+        rules: rules.length,
+        semanticRules: semantic.length,
+        pairs: results.length,
+        requests: jobs.length,
+        violationsFlagged: findings.filter((finding) => finding.flag === "rule_violation").length,
+      },
+    };
+  }
 }
 
 function verdictOrder(verdict: RulePairResult["verdict"]): number {

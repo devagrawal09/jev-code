@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { fakeChoice, fakeNoul, fakeScore } from "../src/adapters/fake-jev.ts";
 import type { JevRequest } from "../src/core/types.ts";
-import { locate } from "../src/workflows/locate.ts";
+import { find } from "../src/workflows/find.ts";
 import { fake, options, tempRepo } from "./helpers.ts";
 
 const ROLES = ["implementation", "caller", "test", "config", "docs", "unrelated", "cannot_tell"];
@@ -50,7 +50,7 @@ describe("find", () => {
         if (name === "missing_evidence") return fakeChoice(MISSING, retry ? "callee" : "none", 0.7);
         return undefined;
       });
-      const packet = await locate(
+      const packet = await find(
         { task: "Webhook retries double-charge customers", top: 5, includeExcerpts: true },
         options(repo.root, adapter),
       );
@@ -88,8 +88,8 @@ describe("find", () => {
     try {
       const first = fake();
       const second = fake();
-      const one = await locate({ task: "unrelated task about fonts" }, options(repo.root, first));
-      await locate({ task: "unrelated task about fonts" }, options(repo.root, second));
+      const one = await find({ task: "unrelated task about fonts" }, options(repo.root, first));
+      await find({ task: "unrelated task about fonts" }, options(repo.root, second));
       assert.deepEqual(
         first.requests.map((request) => candidatesIn(request).map((c) => c.id)),
         second.requests.map((request) => candidatesIn(request).map((c) => c.id)),
@@ -104,12 +104,9 @@ describe("find", () => {
   test("path filters and file limits are explicit", async () => {
     const repo = setup();
     try {
-      const filtered = await locate(
-        { task: "charge", paths: ["src/billing/**"] },
-        options(repo.root, fake()),
-      );
+      const filtered = await find({ task: "charge", paths: ["src/billing/**"] }, options(repo.root, fake()));
       assert.equal(filtered.summary.candidates, 1);
-      const limited = await locate({ task: "charge", maxFiles: 10 }, options(repo.root, fake()));
+      const limited = await find({ task: "charge", maxFiles: 10 }, options(repo.root, fake()));
       assert.equal(limited.coverage.complete, false);
       assert.ok(limited.limits[0]!.includes("--max-files"));
     } finally {
@@ -129,10 +126,7 @@ describe("find", () => {
           return adapter.ask(request, opts);
         },
       };
-      const packet = await locate(
-        { task: "charge" },
-        options(repo.root, splitting as ReturnType<typeof fake>),
-      );
+      const packet = await find({ task: "charge" }, options(repo.root, splitting as ReturnType<typeof fake>));
       assert.equal(packet.coverage.failed, 0);
       assert.equal(packet.coverage.unjudged, 0);
       const answered = adapter.requests.flatMap((request) => candidatesIn(request));

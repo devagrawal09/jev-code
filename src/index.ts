@@ -53,18 +53,16 @@ export {
   type ScoreAnswer,
   ValidationError,
 } from "./core/validation.ts";
-// workflows: domain workflows, run context, evidence types, and ports
-export { type AuditDiffInput as FlagDiffInput, auditDiff as flagDiff } from "./workflows/audit-diff.ts";
+// workflows: check, triage, and find, plus their run context, evidence types, and ports
 export {
-  type CheckCriteriaInput as MapCriteriaInput,
-  checkCriteria as mapCriteria,
-  parseCriteria,
-} from "./workflows/check-criteria.ts";
-export {
-  type CheckRulesInput as FlagRulesInput,
-  checkRules as flagRules,
-  parseRules,
-} from "./workflows/check-rules.ts";
+  type CheckInput,
+  type CheckResult,
+  type CheckSection,
+  type CheckSource,
+  check,
+} from "./workflows/check.ts";
+export { parseCriteria } from "./workflows/check-criteria.ts";
+export { parseRules } from "./workflows/check-rules.ts";
 export { classifyPath, globToRegExp, isSecretPath } from "./workflows/classify.ts";
 export { InputError } from "./workflows/errors.ts";
 export type {
@@ -75,8 +73,8 @@ export type {
   ReviewComment,
   TestRecord,
 } from "./workflows/evidence.ts";
+export { type FindInput, type FindResult, find } from "./workflows/find.ts";
 export { ladderForHunk } from "./workflows/hunks.ts";
-export { type LocateInput, locate } from "./workflows/locate.ts";
 export type {
   ArtifactStore,
   ArtifactWriter,
@@ -88,7 +86,5 @@ export type {
   WorkspaceSource,
 } from "./workflows/ports.ts";
 export { buildFrame, type Outcome, Run, type RunOptions } from "./workflows/run.ts";
-export { parseFrameFile, runFrame } from "./workflows/run-frame.ts";
-export { type TriageCommentsInput, triageComments } from "./workflows/triage-comments.ts";
-export { type TriageFailuresInput, triageFailures } from "./workflows/triage-failures.ts";
+export { type TriageInput, type TriageKind, type TriageResult, triage } from "./workflows/triage.ts";
 export * from "./workflows/types.ts";

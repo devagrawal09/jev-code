@@ -1,4 +1,3 @@
-import { hashValue } from "../core/hash.ts";
 import { choice, noul, score } from "../core/questions.ts";
 import type { JsonObject } from "../core/types.ts";
 import {
@@ -9,39 +8,22 @@ import {
   readScore,
   type ScoreAnswer,
 } from "../core/validation.ts";
-import {
-  describeScope,
-  diffNotChecked,
-  hunkEvidence,
-  hunkRef,
-  loadDiff,
-  requireTask,
-  sortFindings,
-  unjudgedOrFailed,
-} from "./common.ts";
+import { type DiffEvidence, hunkEvidence, hunkRef, type Section, unjudgedOrFailed } from "./common.ts";
 import type { Hunk } from "./evidence.ts";
 import { enabledHunks, type HunkLadder, ladderForHunk, lineRange } from "./hunks.ts";
 import { EVIDENCE_POLICY, massAtLeast, massBelow, round, untrustedInstructionQuestion } from "./policy.ts";
-import type { DiffScope } from "./ports.ts";
-import { buildFrame, Run, type RunOptions } from "./run.ts";
-import type { EvidenceRef, Finding, Packet, Parked } from "./types.ts";
+import { buildFrame, type Run } from "./run.ts";
+import type { EvidenceRef, Finding, Parked } from "./types.ts";
 
-export interface AuditDiffInput {
-  task: string;
-  taskSource?: "user" | "issue" | "agent";
-  scope?: DiffScope;
-  base?: string;
-  maxHunks?: number;
+/** The task section of `check`: task alignment and test safety for every changed hunk. */
+export interface TaskSectionInput {
+  task: { text: string; source: "user" | "issue" | "agent" };
+  maxHunks: number;
 }
 
-export const AUDIT_DIFF = {
-  name: "review",
-  version: 1,
-  budget: { requests: 120, inputTokens: 150_000, wallMs: 60_000 },
-} as const;
-
-export const AUDIT_POLICY = {
-  version: "review-policy@1",
+export const CHECK_TASK_POLICY = {
+  version: "check-task-policy@1",
+  defaultMaxHunks: 150,
   weakLowMass: 0.7,
   weakens: 0.7,
   statedInTask: 0.5,
@@ -78,7 +60,7 @@ interface TestAnswers {
   disablesOrBypasses: number;
 }
 
-export interface AuditHunkResult {
+export interface TaskHunkResult {
   id: string;
   path: string;
   lines: string;
@@ -279,29 +261,12 @@ function enablesFrame(task: JsonObject, candidate: Hunk, dependent: Hunk, refs: 
   });
 }
 
-export async function auditDiff(
-  input: AuditDiffInput,
-  options: RunOptions,
-): Promise<Packet<AuditHunkResult>> {
-  const taskText = requireTask(input.task);
-  const maxHunks = input.maxHunks ?? 150;
-  const selection = {
-    scope: input.scope ?? "worktree",
-    ...(input.base ? { base: input.base } : {}),
-  } as const;
-  const diff = await loadDiff(options.dependencies, selection);
-  const run = await Run.start(AUDIT_DIFF, options, {
-    taskHash: hashValue(taskText),
-    taskSource: input.taskSource ?? "user",
-    diff: describeScope(diff.source),
-    diffHash: hashValue(diff.source.text),
-    maxHunks,
-  });
-  const task: JsonObject = { text: taskText, source: input.taskSource ?? "user" };
+export function taskSection(run: Run, diff: DiffEvidence, input: TaskSectionInput): Section<TaskHunkResult> {
+  const { maxHunks } = input;
+  const task: JsonObject = { ...input.task };
   const limits: string[] = [];
   const findings: Finding[] = [];
   const parked: Parked[] = [];
-  for (const item of diff.excluded) run.setDisposition(item.id, "excluded");
 
   const manifestEntries = diff.hunks.slice(0, 300).map((hunk) => ({
     hunkId: hunk.id,
@@ -322,11 +287,11 @@ export async function auditDiff(
   }
 
   const links = enabledHunks(diff.hunks);
-  const results = new Map<string, AuditHunkResult>();
+  const results = new Map<string, TaskHunkResult>();
   const toJudge: Hunk[] = [];
   for (const [index, hunk] of diff.hunks.entries()) {
     const ladder = ladderForHunk(hunk);
-    const result: AuditHunkResult = {
+    const result: TaskHunkResult = {
       id: hunk.id,
       path: hunk.path,
       lines: lineRange(hunk),
@@ -372,241 +337,238 @@ export async function auditDiff(
     }
     toJudge.push(hunk);
   }
-  await run.candidates({
-    diff: describeScope(diff.source),
-    hunks: [...results.values()],
-    excluded: diff.excluded,
-  });
+  return { candidates: { hunks: [...results.values()] }, judge };
 
-  const intentFrames = toJudge.map((hunk) =>
-    intentFrame(
-      task,
-      manifest,
-      hunk,
-      ladderForHunk(hunk),
-      links.get(hunk.id) ?? [],
-      hunkRef(hunk, diff.source),
-    ),
-  );
-  const testHunks = toJudge.filter((hunk) => hunk.kind === "test" && hunk.removed > 0);
-  const testFrames = testHunks.map((hunk) => testFrame(task, hunk, hunkRef(hunk, diff.source)));
-  const [intentOutcomes, testOutcomes] = await Promise.all([
-    run.judgeAll(intentFrames),
-    run.judgeAll(testFrames),
-  ]);
-
-  const weak: string[] = [];
-  const judgedWithRelation: string[] = [];
-  for (const [index, hunk] of toJudge.entries()) {
-    const result = results.get(hunk.id)!;
-    const outcome = intentOutcomes[index]!;
-    if (!outcome.ok) {
-      result.error = `${outcome.reason}: ${outcome.detail}`;
-      const disposition = unjudgedOrFailed(outcome.reason);
-      result.disposition = disposition;
-      run.setDisposition(hunk.id, disposition);
-      continue;
-    }
-    const answers = outcome.value;
-    const lowMass = massBelow(answers.taskRelation, 2);
-    const highMass = massAtLeast(answers.taskRelation, 2);
-    result.taskRelation = {
-      lowMass,
-      highMass,
-      expected: round(answers.taskRelation.score),
-      distribution: answers.taskRelation.probabilities.map((value) => round(value)),
-    };
-    result.changeKind = {
-      label: answers.changeKind.choice,
-      confidence: round(answers.changeKind.confidence),
-      distribution: Object.fromEntries(
-        Object.entries<number>(answers.changeKind.probabilities).map(([key, value]) => [key, round(value)]),
+  async function judge() {
+    const intentFrames = toJudge.map((hunk) =>
+      intentFrame(
+        task,
+        manifest,
+        hunk,
+        ladderForHunk(hunk),
+        links.get(hunk.id) ?? [],
+        hunkRef(hunk, diff.source),
       ),
-    };
-    result.specialCasesLiteralInput =
-      answers.specialCasesLiteralInput === null ? null : round(answers.specialCasesLiteralInput);
-    result.untrustedInstructionText = round(answers.untrustedInstructionText);
-    result.disposition = "judged";
-    run.setDisposition(hunk.id, "judged");
-    judgedWithRelation.push(hunk.id);
-
-    const direct = answers.taskRelation.probabilities[3] ?? 0;
-    if (
-      direct >= AUDIT_POLICY.conflictDirectMass &&
-      answers.changeKind.choice === "formatting_or_comments" &&
-      answers.changeKind.confidence >= AUDIT_POLICY.conflictFormattingConfidence
-    ) {
-      const reason = "conflict: direct task relation vs formatting_or_comments";
-      parked.push({ id: hunk.id, path: hunk.path, reason });
-      result.disposition = "parked";
-      run.setDisposition(hunk.id, "parked");
-      await run.decision(hunk.id, "hard_conflict", reason, AUDIT_POLICY.version);
-      continue;
-    }
-    if (lowMass >= AUDIT_POLICY.weakLowMass && answers.changeKind.choice !== "formatting_or_comments") {
-      result.flags.push("weak_task_relation");
-      weak.push(hunk.id);
-    }
-    if ((answers.specialCasesLiteralInput ?? 0) >= AUDIT_POLICY.specialCase) {
-      result.flags.push("special_cased_literal_input");
-      findings.push({
-        flag: "special_cased_literal_input",
-        id: hunk.id,
-        source: "jev",
-        severity: "warn",
-        path: hunk.path,
-        lines: result.lines,
-        detail: { p: round(answers.specialCasesLiteralInput ?? 0) },
-      });
-    }
-    await run.decision(
-      hunk.id,
-      "hunk_intent",
-      { lowMass, highMass, flags: result.flags },
-      AUDIT_POLICY.version,
     );
-  }
+    const testHunks = toJudge.filter((hunk) => hunk.kind === "test" && hunk.removed > 0);
+    const testFrames = testHunks.map((hunk) => testFrame(task, hunk, hunkRef(hunk, diff.source)));
+    const [intentOutcomes, testOutcomes] = await Promise.all([
+      run.judgeAll(intentFrames),
+      run.judgeAll(testFrames),
+    ]);
 
-  for (const [index, hunk] of testHunks.entries()) {
-    const result = results.get(hunk.id)!;
-    const outcome = testOutcomes[index]!;
-    if (!outcome.ok) {
-      result.error = [result.error, `test_expectation ${outcome.reason}: ${outcome.detail}`]
-        .filter(Boolean)
-        .join("; ");
-      if (result.disposition === "judged") {
+    const weak: string[] = [];
+    const judgedWithRelation: string[] = [];
+    for (const [index, hunk] of toJudge.entries()) {
+      const result = results.get(hunk.id)!;
+      const outcome = intentOutcomes[index]!;
+      if (!outcome.ok) {
+        result.error = `${outcome.reason}: ${outcome.detail}`;
         const disposition = unjudgedOrFailed(outcome.reason);
         result.disposition = disposition;
         run.setDisposition(hunk.id, disposition);
+        continue;
       }
-      continue;
-    }
-    const answers = outcome.value;
-    result.testExpectation = {
-      weakens: round(answers.weakens),
-      statedInTask: round(answers.statedInTask),
-      disablesOrBypasses: round(answers.disablesOrBypasses),
-    };
-    if (answers.weakens >= AUDIT_POLICY.weakens) {
-      const explained = answers.statedInTask >= AUDIT_POLICY.statedInTask;
-      const flag = explained ? "expectation_changed_per_task" : "test_expectation_weakened";
-      result.flags.push(flag);
-      findings.push({
-        flag,
-        id: hunk.id,
-        source: "jev",
-        severity: explained ? "info" : "warn",
-        path: hunk.path,
-        lines: result.lines,
-        detail: { p: round(answers.weakens), explainedByTask: round(answers.statedInTask) },
-      });
-    }
-    if (
-      answers.disablesOrBypasses >= AUDIT_POLICY.weakens &&
-      !result.deterministicFlags.includes("skip_marker_added")
-    ) {
-      result.flags.push("test_disabled_or_bypassed");
-      findings.push({
-        flag: "test_disabled_or_bypassed",
-        id: hunk.id,
-        source: "jev",
-        severity: "warn",
-        path: hunk.path,
-        lines: result.lines,
-        detail: { p: round(answers.disablesOrBypasses) },
-      });
-    }
-    await run.decision(hunk.id, "test_expectation", result.testExpectation, AUDIT_POLICY.version);
-  }
+      const answers = outcome.value;
+      const lowMass = massBelow(answers.taskRelation, 2);
+      const highMass = massAtLeast(answers.taskRelation, 2);
+      result.taskRelation = {
+        lowMass,
+        highMass,
+        expected: round(answers.taskRelation.score),
+        distribution: answers.taskRelation.probabilities.map((value) => round(value)),
+      };
+      result.changeKind = {
+        label: answers.changeKind.choice,
+        confidence: round(answers.changeKind.confidence),
+        distribution: Object.fromEntries(
+          Object.entries<number>(answers.changeKind.probabilities).map(([key, value]) => [key, round(value)]),
+        ),
+      };
+      result.specialCasesLiteralInput =
+        answers.specialCasesLiteralInput === null ? null : round(answers.specialCasesLiteralInput);
+      result.untrustedInstructionText = round(answers.untrustedInstructionText);
+      result.disposition = "judged";
+      run.setDisposition(hunk.id, "judged");
+      judgedWithRelation.push(hunk.id);
 
-  // Follow-up: a weak hunk that declares something a well-related hunk uses gets one pair check.
-  const followUps: Array<{ weakId: string; dependentId: string }> = [];
-  for (const id of weak) {
-    const dependent = (links.get(id) ?? []).find((other) => {
-      const otherResult = results.get(other);
-      return (otherResult?.taskRelation?.highMass ?? 0) >= AUDIT_POLICY.enablerMinHighMass;
-    });
-    if (dependent) followUps.push({ weakId: id, dependentId: dependent });
-  }
-  const byId = new Map(diff.hunks.map((hunk) => [hunk.id, hunk]));
-  const followFrames = followUps.map(({ weakId, dependentId }) => {
-    const [candidate, dependent] = [byId.get(weakId)!, byId.get(dependentId)!];
-    return enablesFrame(task, candidate, dependent, [
-      hunkRef(candidate, diff.source),
-      hunkRef(dependent, diff.source),
-    ]);
-  });
-  const followOutcomes = await run.judgeAll(followFrames);
-  for (const [index, { weakId, dependentId }] of followUps.entries()) {
-    const outcome = followOutcomes[index]!;
-    const result = results.get(weakId)!;
-    if (!outcome.ok) {
-      result.error = `hunk_enables ${outcome.reason}: ${outcome.detail}`;
-      continue;
-    }
-    result.enables = { hunk: dependentId, probability: round(outcome.value) };
-    if (outcome.value >= AUDIT_POLICY.enables) {
-      result.flags = result.flags.filter((flag) => flag !== "weak_task_relation");
-      result.flags.push("enables_linked_hunk");
-      weak.splice(weak.indexOf(weakId), 1);
-    }
-    await run.decision(weakId, "hunk_enables", result.enables, AUDIT_POLICY.version);
-  }
-
-  const insufficient =
-    judgedWithRelation.length >= AUDIT_POLICY.taskInsufficientMinJudged &&
-    weak.length / judgedWithRelation.length > AUDIT_POLICY.taskInsufficientShare;
-  if (insufficient) {
-    findings.push({
-      flag: "task_text_insufficient",
-      id: "task",
-      source: "policy",
-      severity: "warn",
-      detail: { weakHunks: weak.length, judgedHunks: judgedWithRelation.length },
-    });
-    for (const id of weak) {
-      const result = results.get(id)!;
-      result.flags = result.flags.map((flag) =>
-        flag === "weak_task_relation" ? "weak_task_relation_suppressed" : flag,
+      const direct = answers.taskRelation.probabilities[3] ?? 0;
+      if (
+        direct >= CHECK_TASK_POLICY.conflictDirectMass &&
+        answers.changeKind.choice === "formatting_or_comments" &&
+        answers.changeKind.confidence >= CHECK_TASK_POLICY.conflictFormattingConfidence
+      ) {
+        const reason = "conflict: direct task relation vs formatting_or_comments";
+        parked.push({ id: hunk.id, path: hunk.path, reason });
+        result.disposition = "parked";
+        run.setDisposition(hunk.id, "parked");
+        await run.decision(hunk.id, "hard_conflict", reason, CHECK_TASK_POLICY.version);
+        continue;
+      }
+      if (
+        lowMass >= CHECK_TASK_POLICY.weakLowMass &&
+        answers.changeKind.choice !== "formatting_or_comments"
+      ) {
+        result.flags.push("weak_task_relation");
+        weak.push(hunk.id);
+      }
+      if ((answers.specialCasesLiteralInput ?? 0) >= CHECK_TASK_POLICY.specialCase) {
+        result.flags.push("special_cased_literal_input");
+        findings.push({
+          flag: "special_cased_literal_input",
+          id: hunk.id,
+          source: "jev",
+          severity: "warn",
+          path: hunk.path,
+          lines: result.lines,
+          detail: { p: round(answers.specialCasesLiteralInput ?? 0) },
+        });
+      }
+      await run.decision(
+        hunk.id,
+        "hunk_intent",
+        { lowMass, highMass, flags: result.flags },
+        CHECK_TASK_POLICY.version,
       );
     }
-    await run.decision("task", "task_text_insufficient", { weak: weak.length }, AUDIT_POLICY.version);
-  } else {
-    for (const id of weak) {
-      const result = results.get(id)!;
-      findings.push({
-        flag: "weak_task_relation",
-        id,
-        source: "jev",
-        severity: "warn",
-        path: result.path,
-        lines: result.lines,
-        detail: { lowMass: result.taskRelation!.lowMass, kind: result.changeKind!.label },
-      });
-    }
-  }
 
-  const ordered = [...results.values()];
-  return run.finish({
-    findings: sortFindings(findings),
-    parked,
-    excluded: diff.excluded,
-    limits,
-    notChecked: [
-      "correctness of the change",
-      "tests were not executed",
-      "hunks are judged individually; intent spread across unlinked hunks is not modeled",
-      "hunks with unchanged test files are not checked for weakening",
-      ...diffNotChecked(diff.source),
-    ],
-    results: ordered,
-    summary: {
-      diff: describeScope(diff.source),
-      hunks: diff.hunks.length,
-      weakTaskRelation: insufficient ? 0 : weak.length,
-      taskTextInsufficient: insufficient,
-      testHunksChecked: testHunks.length,
-      followUps: followUps.length,
-    },
-  });
+    for (const [index, hunk] of testHunks.entries()) {
+      const result = results.get(hunk.id)!;
+      const outcome = testOutcomes[index]!;
+      if (!outcome.ok) {
+        result.error = [result.error, `test_expectation ${outcome.reason}: ${outcome.detail}`]
+          .filter(Boolean)
+          .join("; ");
+        if (result.disposition === "judged") {
+          const disposition = unjudgedOrFailed(outcome.reason);
+          result.disposition = disposition;
+          run.setDisposition(hunk.id, disposition);
+        }
+        continue;
+      }
+      const answers = outcome.value;
+      result.testExpectation = {
+        weakens: round(answers.weakens),
+        statedInTask: round(answers.statedInTask),
+        disablesOrBypasses: round(answers.disablesOrBypasses),
+      };
+      if (answers.weakens >= CHECK_TASK_POLICY.weakens) {
+        const explained = answers.statedInTask >= CHECK_TASK_POLICY.statedInTask;
+        const flag = explained ? "expectation_changed_per_task" : "test_expectation_weakened";
+        result.flags.push(flag);
+        findings.push({
+          flag,
+          id: hunk.id,
+          source: "jev",
+          severity: explained ? "info" : "warn",
+          path: hunk.path,
+          lines: result.lines,
+          detail: { p: round(answers.weakens), explainedByTask: round(answers.statedInTask) },
+        });
+      }
+      if (
+        answers.disablesOrBypasses >= CHECK_TASK_POLICY.weakens &&
+        !result.deterministicFlags.includes("skip_marker_added")
+      ) {
+        result.flags.push("test_disabled_or_bypassed");
+        findings.push({
+          flag: "test_disabled_or_bypassed",
+          id: hunk.id,
+          source: "jev",
+          severity: "warn",
+          path: hunk.path,
+          lines: result.lines,
+          detail: { p: round(answers.disablesOrBypasses) },
+        });
+      }
+      await run.decision(hunk.id, "test_expectation", result.testExpectation, CHECK_TASK_POLICY.version);
+    }
+
+    // Follow-up: a weak hunk that declares something a well-related hunk uses gets one pair check.
+    const followUps: Array<{ weakId: string; dependentId: string }> = [];
+    for (const id of weak) {
+      const dependent = (links.get(id) ?? []).find((other) => {
+        const otherResult = results.get(other);
+        return (otherResult?.taskRelation?.highMass ?? 0) >= CHECK_TASK_POLICY.enablerMinHighMass;
+      });
+      if (dependent) followUps.push({ weakId: id, dependentId: dependent });
+    }
+    const byId = new Map(diff.hunks.map((hunk) => [hunk.id, hunk]));
+    const followFrames = followUps.map(({ weakId, dependentId }) => {
+      const [candidate, dependent] = [byId.get(weakId)!, byId.get(dependentId)!];
+      return enablesFrame(task, candidate, dependent, [
+        hunkRef(candidate, diff.source),
+        hunkRef(dependent, diff.source),
+      ]);
+    });
+    const followOutcomes = await run.judgeAll(followFrames);
+    for (const [index, { weakId, dependentId }] of followUps.entries()) {
+      const outcome = followOutcomes[index]!;
+      const result = results.get(weakId)!;
+      if (!outcome.ok) {
+        result.error = `hunk_enables ${outcome.reason}: ${outcome.detail}`;
+        continue;
+      }
+      result.enables = { hunk: dependentId, probability: round(outcome.value) };
+      if (outcome.value >= CHECK_TASK_POLICY.enables) {
+        result.flags = result.flags.filter((flag) => flag !== "weak_task_relation");
+        result.flags.push("enables_linked_hunk");
+        weak.splice(weak.indexOf(weakId), 1);
+      }
+      await run.decision(weakId, "hunk_enables", result.enables, CHECK_TASK_POLICY.version);
+    }
+
+    const insufficient =
+      judgedWithRelation.length >= CHECK_TASK_POLICY.taskInsufficientMinJudged &&
+      weak.length / judgedWithRelation.length > CHECK_TASK_POLICY.taskInsufficientShare;
+    if (insufficient) {
+      findings.push({
+        flag: "task_text_insufficient",
+        id: "task",
+        source: "policy",
+        severity: "warn",
+        detail: { weakHunks: weak.length, judgedHunks: judgedWithRelation.length },
+      });
+      for (const id of weak) {
+        const result = results.get(id)!;
+        result.flags = result.flags.map((flag) =>
+          flag === "weak_task_relation" ? "weak_task_relation_suppressed" : flag,
+        );
+      }
+      await run.decision("task", "task_text_insufficient", { weak: weak.length }, CHECK_TASK_POLICY.version);
+    } else {
+      for (const id of weak) {
+        const result = results.get(id)!;
+        findings.push({
+          flag: "weak_task_relation",
+          id,
+          source: "jev",
+          severity: "warn",
+          path: result.path,
+          lines: result.lines,
+          detail: { lowMass: result.taskRelation!.lowMass, kind: result.changeKind!.label },
+        });
+      }
+    }
+
+    return {
+      results: [...results.values()],
+      findings,
+      parked,
+      limits,
+      notChecked: [
+        "correctness of the change",
+        "tests were not executed",
+        "hunks are judged individually; intent spread across unlinked hunks is not modeled",
+        "hunks with unchanged test files are not checked for weakening",
+      ],
+      summary: {
+        hunks: diff.hunks.length,
+        weakTaskRelation: insufficient ? 0 : weak.length,
+        taskTextInsufficient: insufficient,
+        testHunksChecked: testHunks.length,
+        followUps: followUps.length,
+      },
+    };
+  }
 }

@@ -1,4 +1,4 @@
-import type { JevPort, JsonObject, JsonValue, TransportFailure } from "../core/types.ts";
+import type { JevPort, JsonValue, TransportFailure } from "../core/types.ts";
 import type { DiffFile, ParsedLog, ReviewComment, TestRecord } from "./evidence.ts";
 
 export type DiffScope = "worktree" | "staged" | "branch";
@@ -28,8 +28,6 @@ export interface WorkspaceSource {
   trackedFiles(): Promise<string[]>;
   /** Lines of a readable text file, or null when missing, binary, oversize, or refused. */
   readLines(path: string, maxBytes?: number): Promise<{ lines: string[]; bytes: number } | null>;
-  /** A whole file; throws InputError when missing, oversize, or outside the workspace. */
-  readFile(path: string, maxBytes?: number): Promise<{ path: string; text: string; bytes: number }>;
   fileSize(path: string): Promise<number | null>;
 }
 
@@ -59,8 +57,6 @@ export interface ArtifactWriter {
 /** Storage port for run artifacts. */
 export interface ArtifactStore {
   open(runId: string): Promise<ArtifactWriter>;
-  /** The recorded `inputs` of the most recent runs of a workflow, newest first. */
-  recentInputs(workflow: string, limit: number): Promise<JsonObject[]>;
 }
 
 export interface WorkflowDependencies {

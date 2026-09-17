@@ -1,37 +1,27 @@
-import { hashValue } from "../core/hash.ts";
 import { choice, noul } from "../core/questions.ts";
 import type { JsonObject } from "../core/types.ts";
 import { type ChoiceAnswer, expectKeys, readChoice, readNoul } from "../core/validation.ts";
 import { isSecretPath } from "./classify.ts";
-import {
-  describeScope,
-  diffNotChecked,
-  hunkEvidence,
-  hunkRef,
-  loadDiff,
-  unjudgedOrFailed,
-} from "./common.ts";
+import { type DiffEvidence, hunkEvidence, hunkRef, type Section, unjudgedOrFailed } from "./common.ts";
 import { type Hunk, MAX_COMMENT_BODY_CHARS, normalizeForSignature, type ReviewComment } from "./evidence.ts";
 import { EVIDENCE_POLICY, round, roundedDistribution, untrustedInstructionQuestion } from "./policy.ts";
-import type { DiffScope } from "./ports.ts";
-import { buildFrame, Run, type RunOptions } from "./run.ts";
-import type { EvidenceRef, Exclusion, Finding, Packet, Parked } from "./types.ts";
+import type { WorkspaceSource } from "./ports.ts";
+import { buildFrame, type Run } from "./run.ts";
+import type { EvidenceRef, Exclusion, Finding, Parked } from "./types.ts";
 
-export interface TriageCommentsInput {
-  comments: string;
-  commentsSource: string;
-  diff?: { scope: DiffScope; base?: string } | null;
-  maxComments?: number;
+/** The comments section of `triage`: parsed review comments, judged thread by thread against current code. */
+export interface CommentsSectionInput {
+  comments: readonly ReviewComment[];
+  /** Where the comments came from; shown in evidence references. */
+  source: string;
+  maxItems: number;
+  tracked: ReadonlySet<string>;
+  workspace: WorkspaceSource;
 }
 
-export const TRIAGE_COMMENTS = {
-  name: "comments",
-  version: 1,
-  budget: { requests: 100, inputTokens: 150_000, wallMs: 60_000 },
-} as const;
-
-export const COMMENTS_POLICY = {
-  version: "comments-policy@1",
+export const TRIAGE_COMMENTS_POLICY = {
+  version: "triage-comments-policy@1",
+  defaultMaxItems: 100,
   maxBodyChars: MAX_COMMENT_BODY_CHARS,
   maxReplyChars: 1000,
   maxReplies: 5,
@@ -141,7 +131,7 @@ function commentFrame(
       thread: replies.map((reply) => ({
         id: reply.id,
         authorKind: reply.authorKind,
-        body: reply.body.slice(0, COMMENTS_POLICY.maxReplyChars),
+        body: reply.body.slice(0, TRIAGE_COMMENTS_POLICY.maxReplyChars),
       })),
       currentCode: code,
       relatedDiffHunks: hunks.map(hunkEvidence),
@@ -160,22 +150,12 @@ function commentFrame(
   });
 }
 
-export async function triageComments(
-  input: TriageCommentsInput,
-  options: RunOptions,
-): Promise<Packet<CommentResult>> {
-  const comments = options.dependencies.evidence.reviewComments(input.comments);
-  const maxComments = input.maxComments ?? 100;
-  const diff =
-    input.diff === null ? null : await loadDiff(options.dependencies, input.diff ?? { scope: "worktree" });
-  const tracked = new Set(await options.dependencies.source.trackedFiles());
-  const run = await Run.start(TRIAGE_COMMENTS, options, {
-    commentsSource: input.commentsSource,
-    commentsHash: hashValue(input.comments),
-    comments: comments.length,
-    diff: diff ? describeScope(diff.source) : null,
-    maxComments,
-  });
+export async function commentsSection(
+  run: Run,
+  diff: DiffEvidence | null,
+  input: CommentsSectionInput,
+): Promise<Section<CommentResult>> {
+  const { comments, maxItems: maxComments, tracked } = input;
   const limits: string[] = [];
   const findings: Finding[] = [];
   const parked: Parked[] = [];
@@ -183,7 +163,7 @@ export async function triageComments(
   const truncatedBodies = comments.filter((comment) => comment.bodyTruncated).length;
   if (truncatedBodies > 0) {
     limits.push(
-      `${truncatedBodies} comment body(ies) exceeded ${COMMENTS_POLICY.maxBodyChars} characters and are shown truncated (flagged in state)`,
+      `${truncatedBodies} comment body(ies) exceeded ${TRIAGE_COMMENTS_POLICY.maxBodyChars} characters and are shown truncated (flagged in state)`,
     );
   }
 
@@ -233,7 +213,7 @@ export async function triageComments(
       {
         kind: "comment",
         id: comment.id,
-        probe: `comments-input:${input.commentsSource}`,
+        probe: `comments-input:${input.source}`,
         truncated: comment.bodyTruncated,
         ...(comment.path ? { path: comment.path } : {}),
       },
@@ -259,9 +239,7 @@ export async function triageComments(
     let code: JsonObject | null = null;
     let hunks: Hunk[] = [];
     if (comment.path) {
-      const file = tracked.has(comment.path)
-        ? await options.dependencies.source.readLines(comment.path)
-        : null;
+      const file = tracked.has(comment.path) ? await input.workspace.readLines(comment.path) : null;
       if (!file) {
         result.anchor = {
           status: "gone",
@@ -276,10 +254,10 @@ export async function triageComments(
         };
       } else {
         const anchorLine = comment.line ?? 1;
-        const from = Math.max(1, (comment.startLine ?? anchorLine) - COMMENTS_POLICY.windowLines);
+        const from = Math.max(1, (comment.startLine ?? anchorLine) - TRIAGE_COMMENTS_POLICY.windowLines);
         const to = Math.min(
           file.lines.length,
-          comment.line === null ? 60 : anchorLine + COMMENTS_POLICY.windowLines,
+          comment.line === null ? 60 : anchorLine + TRIAGE_COMMENTS_POLICY.windowLines,
         );
         const shown = file.lines
           .slice(from - 1, to)
@@ -318,7 +296,12 @@ export async function triageComments(
       result.classification = "stale";
       result.disposition = "deterministic";
       run.setDisposition(comment.id, "deterministic");
-      await run.decision(comment.id, "anchor_gone", result.anchor.reason ?? "", COMMENTS_POLICY.version);
+      await run.decision(
+        comment.id,
+        "anchor_gone",
+        result.anchor.reason ?? "",
+        TRIAGE_COMMENTS_POLICY.version,
+      );
       continue;
     }
     if (index >= maxComments) {
@@ -329,135 +312,130 @@ export async function triageComments(
     jobs.push({ comment, result, code, hunks, refs });
   }
   if (roots.length > maxComments)
-    limits.push(
-      `only the first ${maxComments} of ${roots.length} comment threads are judged (--max-comments)`,
-    );
-  await run.candidates({ comments: results });
+    limits.push(`only the first ${maxComments} of ${roots.length} comment threads are judged (--max-items)`);
+  return { candidates: { comments: results }, judge };
 
-  const outcomes = await run.judgeAll(
-    jobs.map(({ comment, code, hunks, refs }) =>
-      commentFrame(
-        comment,
-        (replies.get(comment.id) ?? []).slice(0, COMMENTS_POLICY.maxReplies),
-        code,
-        hunks,
-        refs,
+  async function judge() {
+    const outcomes = await run.judgeAll(
+      jobs.map(({ comment, code, hunks, refs }) =>
+        commentFrame(
+          comment,
+          (replies.get(comment.id) ?? []).slice(0, TRIAGE_COMMENTS_POLICY.maxReplies),
+          code,
+          hunks,
+          refs,
+        ),
       ),
-    ),
-  );
-  for (const [index, { comment, result }] of jobs.entries()) {
-    const outcome = outcomes[index]!;
-    if (!outcome.ok) {
-      result.error = `${outcome.reason}: ${outcome.detail}`;
-      const disposition = unjudgedOrFailed(outcome.reason);
-      result.disposition = disposition;
-      run.setDisposition(comment.id, disposition);
-      continue;
-    }
-    const answers = outcome.value;
-    const p = answers.codeStatus.probabilities;
-    result.codeStatus = { label: answers.codeStatus.choice, distribution: roundedDistribution(p) };
-    result.requestsBehaviorChange = round(answers.requestsChange);
-    result.statesConcreteFailureScenario = round(answers.concreteScenario);
-    result.determinedBy = "jev";
-    result.disposition = "judged";
-    run.setDisposition(comment.id, "judged");
-    const P = COMMENTS_POLICY;
-    if (p.not_a_code_claim >= P.notClaim && answers.concreteScenario >= P.conflictConcrete) {
-      result.classification = "unclear";
-      result.disposition = "parked";
-      run.setDisposition(comment.id, "parked");
-      parked.push({
-        id: comment.id,
-        ...(comment.path ? { path: comment.path } : {}),
-        reason: "conflict: not_a_code_claim vs concrete failure scenario",
-      });
-    } else if (p.described_code_absent_or_changed >= P.alreadyAddressed) {
-      result.classification = "already_addressed";
-    } else if (
-      p.described_code_present >= P.present &&
-      (answers.requestsChange >= P.request || answers.concreteScenario >= P.concrete)
-    ) {
-      result.classification = "actionable";
-    } else if (p.not_a_code_claim >= P.notClaim && answers.requestsChange < P.request) {
-      result.classification = "non_actionable";
-    } else if (
-      p.described_code_present >= P.present &&
-      answers.requestsChange < P.lowSignal &&
-      answers.concreteScenario < P.lowSignal
-    ) {
-      result.classification = "non_actionable";
-    } else {
-      result.classification = "unclear";
-    }
-    if (answers.untrusted >= P.untrusted) {
-      findings.push({
-        flag: "untrusted_instruction_text",
-        id: comment.id,
-        source: "jev",
-        severity: "info",
-        ...(comment.path ? { path: comment.path } : {}),
-        detail: { p: round(answers.untrusted) },
-      });
-    }
-    await run.decision(
-      comment.id,
-      "comment_status",
-      { classification: result.classification },
-      COMMENTS_POLICY.version,
     );
-  }
-
-  for (const result of results) {
-    if (result.classification === "actionable") {
-      findings.push({
-        flag: "comment_actionable",
-        id: result.id,
-        source: "jev",
-        severity: "warn",
-        ...(result.path ? { path: result.path } : {}),
-        ...(result.line ? { lines: String(result.line) } : {}),
-        detail: { excerpt: result.excerpt.slice(0, 80) },
-      });
-    } else if (result.classification === "already_addressed" || result.classification === "stale") {
-      findings.push({
-        flag: `comment_${result.classification}`,
-        id: result.id,
-        source: result.determinedBy === "code" ? "deterministic" : "jev",
-        severity: "info",
-        ...(result.path ? { path: result.path } : {}),
-        ...(result.line ? { lines: String(result.line) } : {}),
-        detail: { note: "verify before resolving the thread" },
-      });
+    for (const [index, { comment, result }] of jobs.entries()) {
+      const outcome = outcomes[index]!;
+      if (!outcome.ok) {
+        result.error = `${outcome.reason}: ${outcome.detail}`;
+        const disposition = unjudgedOrFailed(outcome.reason);
+        result.disposition = disposition;
+        run.setDisposition(comment.id, disposition);
+        continue;
+      }
+      const answers = outcome.value;
+      const p = answers.codeStatus.probabilities;
+      result.codeStatus = { label: answers.codeStatus.choice, distribution: roundedDistribution(p) };
+      result.requestsBehaviorChange = round(answers.requestsChange);
+      result.statesConcreteFailureScenario = round(answers.concreteScenario);
+      result.determinedBy = "jev";
+      result.disposition = "judged";
+      run.setDisposition(comment.id, "judged");
+      const P = TRIAGE_COMMENTS_POLICY;
+      if (p.not_a_code_claim >= P.notClaim && answers.concreteScenario >= P.conflictConcrete) {
+        result.classification = "unclear";
+        result.disposition = "parked";
+        run.setDisposition(comment.id, "parked");
+        parked.push({
+          id: comment.id,
+          ...(comment.path ? { path: comment.path } : {}),
+          reason: "conflict: not_a_code_claim vs concrete failure scenario",
+        });
+      } else if (p.described_code_absent_or_changed >= P.alreadyAddressed) {
+        result.classification = "already_addressed";
+      } else if (
+        p.described_code_present >= P.present &&
+        (answers.requestsChange >= P.request || answers.concreteScenario >= P.concrete)
+      ) {
+        result.classification = "actionable";
+      } else if (p.not_a_code_claim >= P.notClaim && answers.requestsChange < P.request) {
+        result.classification = "non_actionable";
+      } else if (
+        p.described_code_present >= P.present &&
+        answers.requestsChange < P.lowSignal &&
+        answers.concreteScenario < P.lowSignal
+      ) {
+        result.classification = "non_actionable";
+      } else {
+        result.classification = "unclear";
+      }
+      if (answers.untrusted >= P.untrusted) {
+        findings.push({
+          flag: "untrusted_instruction_text",
+          id: comment.id,
+          source: "jev",
+          severity: "info",
+          ...(comment.path ? { path: comment.path } : {}),
+          detail: { p: round(answers.untrusted) },
+        });
+      }
+      await run.decision(
+        comment.id,
+        "comment_status",
+        { classification: result.classification },
+        TRIAGE_COMMENTS_POLICY.version,
+      );
     }
+
+    for (const result of results) {
+      if (result.classification === "actionable") {
+        findings.push({
+          flag: "comment_actionable",
+          id: result.id,
+          source: "jev",
+          severity: "warn",
+          ...(result.path ? { path: result.path } : {}),
+          ...(result.line ? { lines: String(result.line) } : {}),
+          detail: { excerpt: result.excerpt.slice(0, 80) },
+        });
+      } else if (result.classification === "already_addressed" || result.classification === "stale") {
+        findings.push({
+          flag: `comment_${result.classification}`,
+          id: result.id,
+          source: result.determinedBy === "code" ? "deterministic" : "jev",
+          severity: "info",
+          ...(result.path ? { path: result.path } : {}),
+          ...(result.line ? { lines: String(result.line) } : {}),
+          detail: { note: "verify before resolving the thread" },
+        });
+      }
+    }
+    const rank = (result: CommentResult) => {
+      if (result.disposition === "parked") return 5;
+      if (result.classification === "stale" || result.classification === "already_addressed") return 0;
+      if (result.classification === "actionable")
+        return (result.statesConcreteFailureScenario ?? 0) >= TRIAGE_COMMENTS_POLICY.concrete ? 1 : 2;
+      if (result.classification === "unclear") return 3;
+      return 4;
+    };
+    const counts: Record<string, number> = {};
+    for (const result of results) counts[result.classification] = (counts[result.classification] ?? 0) + 1;
+    return {
+      results: [...results].sort((a, b) => rank(a) - rank(b)),
+      findings,
+      parked,
+      excluded,
+      limits,
+      notChecked: [
+        "whether a reviewer's claim or suggestion is correct",
+        "context that exists only in unexported thread history",
+        "no replies were posted and no threads were resolved",
+        ...(diff ? [] : ["relation to the current diff (no diff context)"]),
+      ],
+      summary: { comments: comments.length, threads: roots.length, ...counts },
+    };
   }
-  const rank = (result: CommentResult) => {
-    if (result.disposition === "parked") return 5;
-    if (result.classification === "stale" || result.classification === "already_addressed") return 0;
-    if (result.classification === "actionable")
-      return (result.statesConcreteFailureScenario ?? 0) >= COMMENTS_POLICY.concrete ? 1 : 2;
-    if (result.classification === "unclear") return 3;
-    return 4;
-  };
-  const counts: Record<string, number> = {};
-  for (const result of results) counts[result.classification] = (counts[result.classification] ?? 0) + 1;
-  return run.finish({
-    findings,
-    parked,
-    excluded,
-    limits,
-    notChecked: [
-      "whether a reviewer's claim or suggestion is correct",
-      "context that exists only in unexported thread history",
-      "no replies were posted and no threads were resolved",
-      ...(diff ? diffNotChecked(diff.source) : ["relation to the current diff (no diff context)"]),
-    ],
-    results: [...results].sort((a, b) => rank(a) - rank(b)),
-    summary: {
-      comments: comments.length,
-      threads: roots.length,
-      ...counts,
-      diff: diff ? describeScope(diff.source) : null,
-    },
-  });
 }

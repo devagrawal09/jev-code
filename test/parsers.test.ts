@@ -9,7 +9,6 @@ import { parseRules } from "../src/workflows/check-rules.ts";
 import { InputError } from "../src/workflows/errors.ts";
 import { MAX_HUNK_LINES, normalizeForSignature, resolveStackPath } from "../src/workflows/evidence.ts";
 import { enabledHunks, ladderForHunk } from "../src/workflows/hunks.ts";
-import { parseFrameFile } from "../src/workflows/run-frame.ts";
 import { fixture } from "./helpers.ts";
 
 const SAMPLE_DIFF = `diff --git a/src/cart.ts b/src/cart.ts
@@ -251,40 +250,5 @@ describe("input parsers", () => {
     const long = parseComments(JSON.stringify([{ body: "x".repeat(5000) }]));
     assert.equal(long[0]!.bodyTruncated, true);
     assert.equal(long[0]!.body.length, 4000);
-  });
-
-  test("custom frame files are strictly validated", () => {
-    const frame = parseFrameFile(fixture("frame.json"));
-    assert.deepEqual(Object.keys(frame.questions), ["mentions_retry", "retry_kind", "clarity"]);
-    const base = JSON.parse(fixture("frame.json"));
-    const variant = (patch: (value: typeof base) => void) => {
-      const copy = structuredClone(base);
-      patch(copy);
-      return JSON.stringify(copy);
-    };
-    assert.throws(() => parseFrameFile(variant((v) => (v.command = "ls"))), /unsupported key "command"/);
-    assert.throws(
-      () => parseFrameFile(variant((v) => (v.questions.retry_kind.criteria = { a: "x", b: "y" }))),
-      /cannot_tell/,
-    );
-    assert.throws(
-      () => parseFrameFile(variant((v) => (v.questions.mentions_retry.type = "text"))),
-      /type must be/,
-    );
-    assert.throws(
-      () =>
-        parseFrameFile(
-          variant((v) => {
-            for (let index = 0; index < 13; index++)
-              v.questions[`q${index}`] = { type: "noul", instructions: "x" };
-          }),
-        ),
-      /1-12 questions/,
-    );
-    assert.throws(
-      () => parseFrameFile(variant((v) => (v.state = { blob: "x".repeat(40_000) }))),
-      /exceeds 32768 bytes/,
-    );
-    assert.throws(() => parseFrameFile(variant((v) => (v.state = "text"))), /must be a JSON object/);
   });
 });

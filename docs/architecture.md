@@ -25,18 +25,20 @@ production file must live in one of the four folders. Tests and scripts may impo
 
 ## What happens in a run
 
-Using `review` as the example:
+Using `check` as the example:
 
 1. **cli** parses flags, reads `TYPESAFE_API_KEY` and `TYPESAFE_MODEL` through `adapters/config.ts`, builds the
    dependencies in `adapters/dependencies.ts`, and calls the workflow listed in `cli/registry.ts`.
-2. **workflow** (`workflows/audit-diff.ts`) asks the source port for the diff and the evidence port to parse it
-   into hunks (changed blocks). It skips secret-shaped paths, binaries and vendored files, and applies size limits.
+2. **workflow** (`workflows/check.ts`) validates every input, asks the source port for the diff once, and
+   has the evidence port parse it into hunks (changed blocks). It skips secret-shaped paths, binaries and
+   vendored files, starts one `Run`, and hands the diff to its sections.
 3. **Exact checks** run in code first (`workflows/hunks.ts`, `classify.ts`): skip markers, removed assertions,
    deleted tests, lockfile, CI and config changes. Some pieces are settled here and never reach Jev.
 4. **Questions.** For each remaining piece, the workflow builds a request: a small JSON state plus
    fixed-choice questions (yes/no, choice or score). `workflows/run.ts` redacts it and hands it to
    `core/executor.ts`, which reserves budget, calls the Jev port, validates the answer shape and retries
-   transient failures. Offline, with no key, or out of budget, the piece is marked unjudged instead.
+   transient failures. If the budget is exhausted or Jev is unavailable during a run, the piece is marked
+   unjudged instead. This lives in `core`, so it is the same for `check`, `triage` and `find`.
 5. **Decisions** are made in code with fixed, versioned thresholds (`workflows/policy.ts`), not by the model.
    Unclear answers are "parked" for a human to look at.
 6. **Report.** `Run` builds the `jev-code.packet/v1` packet with coverage, findings, parked items, limits and a
@@ -59,7 +61,7 @@ retry and validation behavior, and `core` can be tested with a fake port and no 
   files. Redaction is best effort, not a secret scanner.
 - **Repository text is untrusted evidence.** Workflows ask Jev whether a piece contains text aimed at an
   automated reviewer and flag it. That is a hint, not a prompt-injection defense. Answers never trigger actions,
-  and a custom question file (`ask`) has no field for commands, files to read, models or actions.
+  and no command accepts caller-written questions, commands, models or actions.
 - **Budgets are hard stops.** When a request, input-token or time limit is reached, no more requests are sent.
 
 ## Records
@@ -69,11 +71,38 @@ Unless `--no-persist` is set, `adapters/recorder.ts` writes `.jev-code/runs/<run
 `frames.ndjson` (every Jev request and response). Files are `0600`, directories `0700`, and
 `.jev-code/.gitignore` contains `*`.
 
+## Commands, workflows and sections
+
+There are exactly three workflows and their names are the same everywhere:
+
+| Command  | Module                | Function   | Info      | Packet `workflow` |
+| -------- | --------------------- | ---------- | --------- | ----------------- |
+| `check`  | `workflows/check.ts`  | `check()`  | `CHECK`   | `check@1`         |
+| `triage` | `workflows/triage.ts` | `triage()` | `TRIAGE`  | `triage@1`        |
+| `find`   | `workflows/find.ts`   | `find()`   | `FIND`    | `find@1`          |
+
+`test/cli.test.ts` fails if a registry key, a workflow's `info.name` and its function name ever differ.
+
+`check` and `triage` are built from **sections**. A section is not a workflow: it has no `WorkflowInfo`, never
+starts a `Run`, and never loads a diff. The workflow does those once and passes them in. A section plans its
+candidates first, then judges, and returns a `SectionReport` (`workflows/common.ts`) that the workflow merges
+into the single packet.
+
+- `check` always runs `check-task.ts` (task alignment, test safety, exact checks). `check-rules.ts` runs when
+  rules are supplied and `check-criteria.ts` when criteria are. Sections judge in that fixed order and share
+  one budget. Each result row carries `section`; `summary` has one entry per section.
+- `triage` runs exactly one of `triage-failures.ts` or `triage-comments.ts`, chosen by the explicit input
+  `kind`. Parsing and classification are specific to the kind. Each result row carries `kind`.
+
+Thresholds stay with the section that uses them, each with its own policy version (for example
+`check-task-policy@1`), so a decision record always names the policy that made it.
+
 ## Adding a workflow
 
-1. Add `src/workflows/<name>.ts`. Export a `WorkflowInfo` (name, version, budget) and a run function that uses
-   only ports from `workflows/ports.ts` and the `Run` helper. Put thresholds in code with a policy version.
+1. Add `src/workflows/<name>.ts`. Export a `WorkflowInfo` whose `name` is the command name, and a run
+   function with that same name that uses only ports from `workflows/ports.ts` and the `Run` helper. Put
+   thresholds in code with a policy version. Prefer a new section of an existing workflow over a new command.
 2. If it needs a new kind of outside input, add a method to a port and implement it in `adapters/`.
-3. Register it in `src/cli/registry.ts` with a stability level (`stable`, `preview`, `experimental`,
-   `advanced`), a summary and a human renderer. Add its usage line and argument handling in `src/cli.ts`.
+3. Register it in `src/cli/registry.ts` under that same name, with a summary and a human renderer. Add its
+   usage line and argument handling in `src/cli.ts`.
 4. Add tests with the fake Jev adapter (`adapters/fake-jev.ts`), then run `npm run check`.

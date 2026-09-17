@@ -13,8 +13,8 @@ import { parseUnifiedDiff } from "./diff.ts";
 import { collectDiff, trackedFiles } from "./git.ts";
 import { classifyError } from "./jev.ts";
 import { parseFailureLog } from "./logs.ts";
-import { readLines, readWorkspaceFile, resolveWorkspacePath } from "./paths.ts";
-import { Recorder, recentInputs } from "./recorder.ts";
+import { readLines, resolveWorkspacePath } from "./paths.ts";
+import { Recorder } from "./recorder.ts";
 import { redactJson, redactText, safeMessage } from "./redact.ts";
 import { parseTestRecords } from "./test-records.ts";
 
@@ -24,7 +24,6 @@ export function createWorkspaceSource(root: string): WorkspaceSource {
     collectDiff: (selection) => collectDiff(root, selection),
     trackedFiles: () => trackedFiles(root),
     readLines: (path, maxBytes) => readLines(root, path, maxBytes),
-    readFile: (path, maxBytes) => readWorkspaceFile(root, path, maxBytes),
     async fileSize(path) {
       try {
         const resolved = await resolveWorkspacePath(root, path);
@@ -52,10 +51,7 @@ export function createRedaction(): RedactionPort {
 
 /** Artifacts under `<root>/.jev-code/runs`. */
 export function createArtifactStore(root: string): ArtifactStore {
-  return {
-    open: (runId) => Recorder.open(root, runId),
-    recentInputs: (workflow, limit) => recentInputs(root, workflow, limit),
-  };
+  return { open: (runId) => Recorder.open(root, runId) };
 }
 
 export function createRunId(workflow: string): string {

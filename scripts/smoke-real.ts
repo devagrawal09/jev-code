@@ -39,7 +39,7 @@ try {
 
   const result = spawnSync(
     process.execPath,
-    [cli, "review", "--task", "Give members a 10% discount", "--json", "--no-persist"],
+    [cli, "check", "--task", "Give members a 10% discount", "--json", "--no-persist"],
     {
       cwd: root,
       env: process.env,
@@ -52,6 +52,7 @@ try {
     findings: Array<{ flag: string; path?: string; detail?: Record<string, unknown> }>;
     jev: Record<string, unknown>;
     results: Array<{
+      section: string;
       path: string;
       taskRelation: { highMass: number } | null;
       changeKind: { label: string } | null;
@@ -73,13 +74,15 @@ try {
           path: finding.path,
           detail: finding.detail,
         })),
-        hunks: packet.results.map((r) => ({
-          path: r.path,
-          highMass: r.taskRelation?.highMass ?? null,
-          changeKind: r.changeKind?.label ?? null,
-          testExpectation: r.testExpectation,
-          error: r.error,
-        })),
+        hunks: packet.results
+          .filter((r) => r.section === "task")
+          .map((r) => ({
+            path: r.path,
+            highMass: r.taskRelation?.highMass ?? null,
+            changeKind: r.changeKind?.label ?? null,
+            testExpectation: r.testExpectation,
+            error: r.error,
+          })),
         jev: packet.jev,
       },
       null,

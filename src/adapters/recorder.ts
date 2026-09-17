@@ -1,6 +1,6 @@
-import { appendFile, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { JsonObject, JsonValue } from "../core/types.ts";
+import type { JsonValue } from "../core/types.ts";
 import type { ArtifactWriter } from "../workflows/ports.ts";
 import { redactJson } from "./redact.ts";
 
@@ -55,36 +55,6 @@ export class Recorder implements ArtifactWriter {
     this.chain = next.catch(() => undefined);
     return next;
   }
-}
-
-/**
- * The recorded `inputs` of the newest runs whose IDs start with `<workflow>-`, newest first.
- * Run IDs embed a UTC timestamp, so reverse lexical order is newest first. Partial artifacts are skipped.
- */
-export async function recentInputs(root: string, workflow: string, limit: number): Promise<JsonObject[]> {
-  let names: string[];
-  try {
-    names = (await readdir(join(root, ARTIFACT_ROOT)))
-      .filter((name) => name.startsWith(`${workflow}-`))
-      .sort()
-      .reverse();
-  } catch {
-    return [];
-  }
-  const found: JsonObject[] = [];
-  for (const name of names.slice(0, limit)) {
-    try {
-      const value = JSON.parse(await readFile(join(root, ARTIFACT_ROOT, name, "inputs.json"), "utf8")) as {
-        inputs?: unknown;
-      };
-      if (typeof value.inputs === "object" && value.inputs !== null && !Array.isArray(value.inputs)) {
-        found.push(value.inputs as JsonObject);
-      }
-    } catch {
-      // Partial artifacts are ignored.
-    }
-  }
-  return found;
 }
 
 function sanitize(value: unknown): JsonValue {
