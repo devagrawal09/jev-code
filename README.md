@@ -4,18 +4,36 @@
 [![npm](https://img.shields.io/npm/v/jev-code)](https://www.npmjs.com/package/jev-code)
 [![license: MIT](https://img.shields.io/npm/l/jev-code)](LICENSE)
 
-**Find what to double-check before you trust a coding agent's "done".**
+**The intelligent assistant for coding agents.**
 
-Coding agents often finish with passing tests and a confident summary, but the change can still:
+jev-code is a command-line toolkit that coding agents can delegate judgment-heavy work to. Instead of asking the agent to inspect everything itself, it can hand jev-code a focused task such as checking a diff, understanding a failure log, applying repository rules, or finding relevant code.
 
-- touch code that has nothing to do with the task;
-- weaken tests so they pass: skip them, delete assertions, or loosen expected values;
-- misread a failing test and "fix" the wrong thing.
+Each command gathers the right evidence, asks a fixed set of bounded questions, and returns a structured report the agent can act on. jev-code does not write code or take control of the workflow. It gives the coding agent a second, consistent source of judgment for common tasks.
 
-jev-code is a command-line tool that points you at those spots. It never edits code, never runs your tests,
-and never says a change is correct. It gives you a short list of places to look.
+## What agents can delegate
 
-## How it works
+| Command | Status | Delegated task |
+| --- | --- | --- |
+| `flag-diff` | Stable | Check whether changed code belongs to the task and whether tests became weaker. |
+| `triage-failures` | Stable | Pull useful failures from a test or CI log and relate them to the current change. |
+| `flag-rules` | Preview | Check changed code against semantic repository rules written by a human. |
+| `map-criteria` | Preview | Connect acceptance criteria to implementation and test evidence. |
+| `triage-comments` | Experimental | Decide which supplied review comments are still actionable, already handled, stale, or unclear. |
+| `locate` | Experimental | Produce a shortlist of files that may matter for a task. |
+| `run-frame` | Advanced | Run one custom, validated Jev request when no built-in workflow fits. |
+
+### What the statuses mean
+
+- **Stable:** ready for normal agent use. The command and report format are part of the supported 0.1 interface.
+- **Preview:** implemented and tested, but the questions, thresholds, or report details may change as people use it.
+- **Experimental:** available to try, but its value and interface are still being evaluated. It may change substantially or be removed.
+- **Advanced:** a lower-level escape hatch for custom use. This is about intended audience, not maturity.
+
+Only `flag-diff` and `triage-failures` are stable because they cover frequent tasks with clear inputs and useful, bounded outputs. The other workflows depend more on repository-specific rules, criteria, comments, or search behavior, so jev-code does not promise their current interface yet. A status describes how much you can rely on the interface, not whether a result is correct: every report is advisory.
+
+Start with `flag-diff` and `triage-failures`.
+
+## How delegation works
 
 1. **Code gathers small pieces of evidence.** jev-code reads your Git diff (or a test log you saved) and splits
    it into small, size-limited pieces, such as one changed block of a file or one failure from a log.
@@ -65,7 +83,7 @@ The report points to the skipped test and removed assertion. Because this exampl
 
 Read both `findings` and `notChecked`. An empty findings list is **not** an approval. Without `--offline`, and with an API key, jev-code can also ask Jev whether each changed block belongs to the task and whether a test expectation became weaker.
 
-## The two stable commands
+## Start with these commands
 
 **`flag-diff`** compares a diff with the task text and flags changed blocks that look unrelated to the task,
 tests that were weakened, and unexpected lockfile, CI or config edits.
@@ -89,19 +107,6 @@ npm test 2>&1 | jev-code triage-failures --log -
 
 Files passed with `--task-file` or `--log` must be inside the repository. Run `jev-code <command> --help` for
 all options.
-
-## Other commands
-
-These work, but are not part of the stable 0.1 promise. Preview output may change in a minor release;
-experimental commands may change or be removed.
-
-| Command           | Status       | What it does                                                                     |
-| ----------------- | ------------ | -------------------------------------------------------------------------------- |
-| `flag-rules`      | preview      | Flags changes that may break rules you write in a JSON rules file                |
-| `map-criteria`    | preview      | Maps each acceptance criterion to changed code and test results you supply       |
-| `triage-comments` | experimental | Sorts exported review comments: actionable, already addressed, stale, unclear... |
-| `locate`          | experimental | Ranks tracked files that may matter for a task (a shortlist, not an answer)      |
-| `run-frame`       | advanced     | Sends one custom question file you write to Jev; answers are not calibrated      |
 
 ## Using it from a coding agent
 
