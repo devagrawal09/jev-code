@@ -6,35 +6,40 @@
 
 **The intelligent assistant for coding agents.**
 
-jev-code is a command-line toolkit that coding agents can delegate judgment-heavy work to. Instead of asking the agent to inspect everything itself, it can hand jev-code a focused task: checking a diff, triaging failures or review comments, or finding relevant code.
+jev-code is a command-line toolkit that coding agents can delegate judgment-heavy work to. Instead of asking the agent to inspect everything itself, it can describe what it needs: checking a diff, triaging failures or review comments, or finding relevant code.
 
-Each command gathers the right evidence, asks a fixed set of bounded questions, and returns a structured report the agent can act on. jev-code does not write code or take control of the workflow. It gives the coding agent a second, consistent source of judgment for common tasks.
+Jev routes that request to one typed internal workflow. The workflow gathers the right evidence, asks a fixed set of bounded questions, and returns a structured report the agent can act on. jev-code does not write code or take control of the workflow. It gives the coding agent a second, consistent source of judgment for common tasks.
 
 ## What agents can delegate
 
-| Command | What it does |
+| Request | What it does |
 | --- | --- |
-| `check` | Check a diff against its task, and optionally against project rules and acceptance criteria. |
-| `triage` | Sort test failures or review comments and show which need attention. |
-| `find` | Find files that may be relevant to a task. |
+| Find relevant code | Rank files that may be relevant to a task. |
+| Check current changes | Check a diff against its task, and optionally against project rules and acceptance criteria. |
+| Triage test failures | Sort failures from a supplied test or CI log. |
+| Triage review comments | Sort supplied review comments and show which need attention. |
 
-These three are the whole command surface.
+These four bounded workflows are the whole capability surface. They are not CLI subcommands: every invocation starts with a natural-language request.
 
-> **Experimental:** jev-code is a new product. Every command, report, and interface may change.
+> **Experimental:** jev-code is a new product. Every request, report, and interface may change.
 
-A common agent flow uses `find` before editing, `check` before calling the work done, and `triage` when tests fail or review comments arrive.
+A common agent flow asks jev-code to find relevant files before editing, check changes before calling the work done, and triage failures or review comments when they arrive.
 
 ## How delegation works
 
-1. **Code gathers small pieces of evidence.** jev-code reads your Git diff (or a test log you saved) and splits
+1. **The request is routed within a fixed boundary.** Jev chooses `find`, `check`, `triage_failures`,
+   `triage_comments`, or `cannot_tell`. The router sees the request plus deterministic facts such as whether a
+   diff exists and whether supplied input is a recognized failure log or review-comment JSON. It has no tools
+   and cannot invent another operation. Ambiguous requests produce a clarification question.
+2. **Code gathers small pieces of evidence.** jev-code reads your Git diff (or a test log you supplied) and splits
    it into small, size-limited pieces, such as one changed block of a file or one failure from a log.
-2. **Exact checks run first.** Plain rules catch things like an added `test.skip`, deleted assertions,
+3. **Exact checks run first.** Plain rules catch things like an added `test.skip`, deleted assertions,
    deleted test files, and lockfile, CI or config changes.
-3. **Jev answers fixed-choice questions about each piece.** Using your required TypeSafe API key, jev-code asks
+4. **Jev answers fixed-choice questions about each piece.** Using your required TypeSafe API key, jev-code asks
    [TypeSafe Jev](https://typesafe.ai), a model that answers multiple-choice questions, about one small piece
    at a time. For example: "How closely is this changed block related to the task?" jev-code's own code, not
    the model, turns the answers into flags using fixed thresholds.
-4. **You get an advisory report.** Each flag points to a file and line range. The report also lists what
+5. **You get an advisory report.** Each flag points to a file and line range. The report also lists what
    could not be decided and what was **not checked**. There is no "pass" result.
 
 ## Get started
@@ -66,18 +71,18 @@ export TYPESAFE_API_KEY="<your TypeSafe API key>"
 Inside that repository:
 
 ```sh
-jev-code check --task "Fix the crash in parseConfig when raw is null"
+jev-code "Check whether these changes fix the crash in parseConfig when raw is null"
 ```
 
 The report points to the skipped test and removed assertion. Jev also checks whether each changed block belongs to the task and whether a test expectation became weaker.
 
 Read both `findings` and `notChecked`. An empty findings list is **not** an approval.
 
-## The commands
+## The workflows
 
-**`check`** compares a diff with the task text. It always flags changed blocks that look unrelated to the
+When the request asks to **check current changes**, jev-code compares the diff with the task text. It always flags changed blocks that look unrelated to the
 task, tests that were weakened, skipped or deleted, and unexpected lockfile, CI or config edits. The task is
-required. Three optional inputs add sections to the same report:
+the request itself unless `--task` or `--task-file` supplies a more exact version. Three optional inputs add sections to the same report:
 
 - `--rules <path>`: a JSON file of project rules. Flags changed blocks that may break a rule.
 - `--criteria <text>` or `--criteria-file <path>`: a numbered or bulleted list of requirements. Shows which
@@ -85,9 +90,9 @@ required. Three optional inputs add sections to the same report:
 - `--test-results <path>`: JSON or JUnit test records, used as evidence for the criteria.
 
 ```sh
-jev-code check --task "Fix the crash in parseConfig when raw is null"   # uncommitted changes vs HEAD
-jev-code check --task-file task.md --task-source user --scope staged    # only staged changes
-jev-code check --task-file task.md --scope branch --base main \
+jev-code "Check whether these changes fix null config values"          # uncommitted changes vs HEAD
+jev-code "Check the staged changes" --task-file task.md --scope staged # only staged changes
+jev-code "Check this branch against its requirements" --task-file task.md --scope branch --base main \
   --rules rules.json --criteria-file acceptance.md --test-results junit.xml
 ```
 
@@ -107,31 +112,31 @@ listed as not checked, because linters and people handle those better.
 }
 ```
 
-**`triage`** sorts incoming items. You say which kind with `--kind` and give one input with `--input`
-(a file in the repository, or `-` for stdin):
+When the request asks to **triage incoming items**, jev-code identifies a recognized failure log or
+review-comment JSON from `--input` or piped stdin:
 
-- `--kind failures` splits a saved test or CI log into separate failures, groups duplicates, and relates
+- Failure triage splits a saved test or CI log into separate failures, groups duplicates, and relates
   each one to the diff, for example as caused by the change or as an environment or network problem. It also
   says what rerun would settle the question. It does not run or rerun anything.
-- `--kind comments` reads exported review comments (a JSON array, including the GitHub API shape) and sorts
+- Comment triage reads exported review comments (a JSON array, including the GitHub API shape) and sorts
   them into actionable, already addressed, stale, unclear and non-actionable by comparing each with the
   current code. It never replies to or resolves anything.
 
 ```sh
-jev-code triage --kind failures --input test-output.log
-npm test 2>&1 | jev-code triage --kind failures --input -
-gh api repos/OWNER/REPO/pulls/123/comments | jev-code triage --kind comments --input -
+jev-code "Triage the test failures" --input test-output.log
+npm test 2>&1 | jev-code "Triage these failures"
+gh api repos/OWNER/REPO/pulls/123/comments | jev-code "Triage these review comments"
 ```
 
 Every row in `results` carries the same `kind`. Use `--no-diff` when the items are unrelated to local changes.
 
-**`find`** ranks tracked files by how relevant they look for a task, reading excerpts only of likely ones.
+When the request asks to **find relevant code**, jev-code ranks tracked files by how relevant they look for the task, reading excerpts only of likely ones.
 
 ```sh
-jev-code find "Webhook retries double-charge customers" --paths "src/**" --top 5
+jev-code "Find the code involved when webhook retries double-charge customers" --paths "src/**" --top 5
 ```
 
-Files passed to any command must be inside the repository. Run `jev-code <command> --help` for all options.
+Files passed to jev-code must be inside the repository. Run `jev-code --help` for all options.
 
 ## Using it from a coding agent
 
@@ -141,12 +146,12 @@ jev-code is a CLI with a JSON output. It ships no agent plugin or hook. Copy thi
 ```text
 Before you say a coding task is done:
 1. Run the project's normal tests, type checks and linters yourself. jev-code does not run them.
-2. Run: jev-code check --task "<the user's original task, word for word>" --task-source user --json
+2. Run: jev-code "Check the current changes against the user's task" --task "<the user's original task, word for word>" --task-source user --json
    Add --rules <file> and --criteria-file <file> if the project has them.
 3. Optional: if a test run failed, save its output to a file in the repository and run:
-   jev-code triage --kind failures --input <that file> --json
+   jev-code "Triage these test failures" --input <that file> --json
 4. Read every item in "findings", "parked" and "notChecked". Fix the code, or tell the user why each one is fine.
-5. Exit codes 10, 11 and 12 mean the report is incomplete (11: Jev was not called). No findings does not mean the change is approved. Never say jev-code passed it.
+5. Exit codes 10 and 12 mean the report is incomplete. Exit 64 means the request needs clarification. No findings does not mean the change is approved. Never say jev-code passed it.
 ```
 
 ## Reports and privacy
@@ -157,7 +162,7 @@ Use `--json` when an agent or script will read the report. The most important fi
 - `parked`: items jev-code could not decide
 - `notChecked`: work jev-code did not perform
 - `coverage`: how much evidence was actually examined
-- `workflow`: the command and its report version, such as `check@1`
+- `workflow`: the selected workflow and its report version, such as `check@1`
 
 Every report uses the `jev-code.packet/v1` schema.
 
@@ -165,7 +170,7 @@ There is no `pass` or `approved` result. Run `jev-code --help` for exit-code mea
 
 By default, run records are saved under `.jev-code/runs/<run-id>/`. They can contain code and log lines, so they are private to your user and ignored by Git. Use `--no-persist` to disable them.
 
-When model-backed checks run, jev-code sends TypeSafe only the task and bounded evidence needed by that command, such as changed blocks or short failure-log sections. Obvious secret files and common token formats are filtered on a best-effort basis, but jev-code is not a secret scanner. Review TypeSafe's data terms before sending private or regulated code.
+jev-code first sends TypeSafe the redacted request, input shape, diff presence, available capabilities and option names for routing. The selected workflow then sends only the task and bounded evidence it needs, such as changed blocks or short failure-log sections. Obvious secret files and common token formats are filtered on a best-effort basis, but jev-code is not a secret scanner. Review TypeSafe's data terms before sending private or regulated code.
 
 jev-code does not replace tests, type checks, linters, security tools, or human review.
 

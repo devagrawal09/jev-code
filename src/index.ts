@@ -15,7 +15,7 @@ export { classifyError, createSdkAdapter, MissingCredentialError } from "./adapt
 export { parseFailureLog } from "./adapters/logs.ts";
 export { redactJson, redactText } from "./adapters/redact.ts";
 export { parseTestRecords } from "./adapters/test-records.ts";
-// cli: dispatch registry and output formatting
+// cli: internal workflow registry and output formatting
 export { EXIT, exitCodeFor, renderHuman } from "./cli/output.ts";
 export { WORKFLOWS, type WorkflowDefinition, type WorkflowName } from "./cli/registry.ts";
 // core: generic frames, questions, validation, budgets, batching, and execution
@@ -86,5 +86,16 @@ export type {
   WorkspaceSource,
 } from "./workflows/ports.ts";
 export { buildFrame, type Outcome, Run, type RunOptions } from "./workflows/run.ts";
-export { type TriageInput, type TriageKind, type TriageResult, triage } from "./workflows/triage.ts";
+export {
+  type TriageCommentsInput,
+  type TriageCommentsResult,
+  type TriageFailuresInput,
+  type TriageFailuresResult,
+  type TriageInput,
+  type TriageKind,
+  type TriageResult,
+  triage,
+  triageComments,
+  triageFailures,
+} from "./workflows/triage.ts";
 export * from "./workflows/types.ts";

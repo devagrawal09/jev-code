@@ -39,6 +39,26 @@ export const TRIAGE = {
 
 /** One triaged item. `kind` matches the input kind; every result in a packet has the same kind. */
 export type TriageResult = ({ kind: "failures" } & FailureResult) | ({ kind: "comments" } & CommentResult);
+export type TriageFailuresInput = Omit<TriageInput, "kind">;
+export type TriageCommentsInput = Omit<TriageInput, "kind" | "task">;
+export type TriageFailuresResult = Extract<TriageResult, { kind: "failures" }>;
+export type TriageCommentsResult = Extract<TriageResult, { kind: "comments" }>;
+
+/** Typed routing target for failure logs. */
+export async function triageFailures(
+  input: TriageFailuresInput,
+  options: RunOptions,
+): Promise<Packet<TriageFailuresResult>> {
+  return triage({ ...input, kind: "failures" }, options) as Promise<Packet<TriageFailuresResult>>;
+}
+
+/** Typed routing target for exported review comments. */
+export async function triageComments(
+  input: TriageCommentsInput,
+  options: RunOptions,
+): Promise<Packet<TriageCommentsResult>> {
+  return triage({ ...input, kind: "comments" }, options) as Promise<Packet<TriageCommentsResult>>;
+}
 
 /**
  * Sort incoming items that need attention: test failures from a log, or review comments.

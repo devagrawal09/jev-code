@@ -1,9 +1,18 @@
 import { CHECK, type CheckInput, type CheckResult, check } from "../workflows/check.ts";
 import { FIND, type FindInput, type FindResult, find } from "../workflows/find.ts";
 import type { RunOptions, WorkflowInfo } from "../workflows/run.ts";
-import { TRIAGE, type TriageInput, type TriageResult, triage } from "../workflows/triage.ts";
+import {
+  TRIAGE,
+  type TriageCommentsInput,
+  type TriageCommentsResult,
+  type TriageFailuresInput,
+  type TriageFailuresResult,
+  triageComments,
+  triageFailures,
+} from "../workflows/triage.ts";
 import type { Packet } from "../workflows/types.ts";
 import type { HumanSection } from "./output.ts";
+import type { WorkflowName } from "./router.ts";
 
 export interface WorkflowDefinition<I, R> {
   info: WorkflowInfo;
@@ -67,15 +76,14 @@ export const checkWorkflow: WorkflowDefinition<CheckInput, CheckResult> = {
   ],
 };
 
-export const triageWorkflow: WorkflowDefinition<TriageInput, TriageResult> = {
+export const triageFailuresWorkflow: WorkflowDefinition<TriageFailuresInput, TriageFailuresResult> = {
   info: TRIAGE,
-  summary: "Sort test failures or review comments and show which need attention",
-  run: triage,
+  summary: "Sort test failures and show which need attention",
+  run: triageFailures,
   render: (packet) => [
     {
       title: "failures",
       lines: packet.results
-        .filter((result) => result.kind === "failures")
         .slice(0, 30)
         .flatMap((result) => [
           `${result.testName ?? result.id} (log ${result.lines}) relation=${result.relation.label} kind=${result.failureKind.label}${result.duplicateOf ? ` duplicate-of=${result.duplicateOf}` : ""}`,
@@ -83,10 +91,17 @@ export const triageWorkflow: WorkflowDefinition<TriageInput, TriageResult> = {
           ...(result.wouldSettle.length > 0 ? [`    would settle: ${result.wouldSettle.join("; ")}`] : []),
         ]),
     },
+  ],
+};
+
+export const triageCommentsWorkflow: WorkflowDefinition<TriageCommentsInput, TriageCommentsResult> = {
+  info: TRIAGE,
+  summary: "Sort review comments and show which need attention",
+  run: triageComments,
+  render: (packet) => [
     {
       title: "comments",
       lines: packet.results
-        .filter((result) => result.kind === "comments")
         .slice(0, 40)
         .map(
           (result) =>
@@ -118,13 +133,13 @@ export const findWorkflow: WorkflowDefinition<FindInput, FindResult> = {
 };
 
 /**
- * Transport-neutral registry. A CLI, MCP adapter, or hook runner can dispatch through it.
- * Each key is the command name and must equal its workflow's `info.name`.
+ * Transport-neutral internal routing targets. Public callers describe their intent instead of naming these.
  */
 export const WORKFLOWS = {
-  check: checkWorkflow,
-  triage: triageWorkflow,
   find: findWorkflow,
-} as const;
+  check: checkWorkflow,
+  triage_failures: triageFailuresWorkflow,
+  triage_comments: triageCommentsWorkflow,
+} as const satisfies Record<WorkflowName, unknown>;
 
-export type WorkflowName = keyof typeof WORKFLOWS;
+export type { WorkflowName } from "./router.ts";

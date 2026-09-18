@@ -27,21 +27,26 @@ production file must live in one of the four folders. Tests and scripts may impo
 
 Using `check` as the example:
 
-1. **cli** parses flags, reads `TYPESAFE_API_KEY` and `TYPESAFE_MODEL` through `adapters/config.ts`, builds the
-   dependencies in `adapters/dependencies.ts`, and calls the workflow listed in `cli/registry.ts`.
-2. **workflow** (`workflows/check.ts`) validates every input, asks the source port for the diff once, and
+1. **cli** parses the natural-language request and flags, reads `TYPESAFE_API_KEY` and `TYPESAFE_MODEL`
+   through `adapters/config.ts`, and builds the dependencies in `adapters/dependencies.ts`.
+2. **routing** (`cli/router.ts`) receives the redacted request plus deterministic context: diff presence,
+   input shape, available capabilities, and supplied option names. One validated choice selects `find`,
+   `check`, `triage_failures`, `triage_comments`, or `cannot_tell`. Fixed confidence and capability gates turn
+   uncertain or unavailable choices into `cannot_tell`; the CLI then asks for clarification. The router has no
+   tool access and cannot name an operation outside that enum.
+3. **workflow** (`workflows/check.ts`) validates every input, asks the source port for the diff once, and
    has the evidence port parse it into hunks (changed blocks). It skips secret-shaped paths, binaries and
    vendored files, starts one `Run`, and hands the diff to its sections.
-3. **Exact checks** run in code first (`workflows/hunks.ts`, `classify.ts`): skip markers, removed assertions,
+4. **Exact checks** run in code first (`workflows/hunks.ts`, `classify.ts`): skip markers, removed assertions,
    deleted tests, lockfile, CI and config changes. Some pieces are settled here and never reach Jev.
-4. **Questions.** For each remaining piece, the workflow builds a request: a small JSON state plus
+5. **Questions.** For each remaining piece, the workflow builds a request: a small JSON state plus
    fixed-choice questions (yes/no, choice or score). `workflows/run.ts` redacts it and hands it to
    `core/executor.ts`, which reserves budget, calls the Jev port, validates the answer shape and retries
    transient failures or invalid model responses. If the budget is exhausted or Jev is unavailable during a run, the piece is marked
    unjudged instead. This lives in `core`, so it is the same for `check`, `triage` and `find`.
-5. **Decisions** are made in code with fixed, versioned thresholds (`workflows/policy.ts`), not by the model.
+6. **Decisions** are made in code with fixed, versioned thresholds (`workflows/policy.ts`), not by the model.
    Unclear answers are "parked" for a human to look at.
-6. **Report.** `Run` builds the `jev-code.packet/v1` packet with coverage, findings, parked items, limits and a
+7. **Report.** `Run` builds the `jev-code.packet/v1` packet with coverage, findings, parked items, limits and a
    non-empty `notChecked` list. `cli/output.ts` prints it as text or JSON and maps the status to an exit code.
 
 ## Why core is thin
@@ -61,7 +66,7 @@ retry and validation behavior, and `core` can be tested with a fake port and no 
   files. Redaction is best effort, not a secret scanner.
 - **Repository text is untrusted evidence.** Workflows ask Jev whether a piece contains text aimed at an
   automated reviewer and flag it. That is a hint, not a prompt-injection defense. Answers never trigger actions,
-  and no command accepts caller-written questions, commands, models or actions.
+  and the CLI accepts no caller-written questions, workflow choices or actions.
 - **Budgets are hard stops.** When a request, input-token or time limit is reached, no more requests are sent.
 
 ## Records
@@ -71,17 +76,20 @@ Unless `--no-persist` is set, `adapters/recorder.ts` writes `.jev-code/runs/<run
 `frames.ndjson` (every Jev request and response). Files are `0600`, directories `0700`, and
 `.jev-code/.gitignore` contains `*`.
 
-## Commands, workflows and sections
+## Routing targets, workflows and sections
 
-There are exactly three workflows and their names are the same everywhere:
+The public CLI has no workflow subcommands or explicit route override. Its four internal targets are safe,
+typed entry points in `cli/registry.ts`:
 
-| Command  | Module                | Function   | Info      | Packet `workflow` |
-| -------- | --------------------- | ---------- | --------- | ----------------- |
-| `check`  | `workflows/check.ts`  | `check()`  | `CHECK`   | `check@1`         |
-| `triage` | `workflows/triage.ts` | `triage()` | `TRIAGE`  | `triage@1`        |
-| `find`   | `workflows/find.ts`   | `find()`   | `FIND`    | `find@1`          |
+| Router target      | Module                | Function           | Run info | Packet `workflow` |
+| ------------------ | --------------------- | ------------------ | -------- | ----------------- |
+| `find`             | `workflows/find.ts`   | `find()`           | `FIND`   | `find@1`          |
+| `check`            | `workflows/check.ts`  | `check()`          | `CHECK`  | `check@1`         |
+| `triage_failures`  | `workflows/triage.ts` | `triageFailures()` | `TRIAGE` | `triage@1`        |
+| `triage_comments`  | `workflows/triage.ts` | `triageComments()` | `TRIAGE` | `triage@1`        |
 
-`test/cli.test.ts` fails if a registry key, a workflow's `info.name` and its function name ever differ.
+`cannot_tell` is a router outcome, not a workflow. It returns a clarification error without starting a run.
+`test/cli.test.ts` fixes the routing-target set and exercises each typed entry point.
 
 `check` and `triage` are built from **sections**. A section is not a workflow: it has no `WorkflowInfo`, never
 starts a `Run`, and never loads a diff. The workflow does those once and passes them in. A section plans its
@@ -91,18 +99,19 @@ into the single packet.
 - `check` always runs `check-task.ts` (task alignment, test safety, exact checks). `check-rules.ts` runs when
   rules are supplied and `check-criteria.ts` when criteria are. Sections judge in that fixed order and share
   one budget. Each result row carries `section`; `summary` has one entry per section.
-- `triage` runs exactly one of `triage-failures.ts` or `triage-comments.ts`, chosen by the explicit input
-  `kind`. Parsing and classification are specific to the kind. Each result row carries `kind`.
+- `triageFailures()` and `triageComments()` fix the input kind before calling the shared `triage` workflow,
+  which runs exactly one of `triage-failures.ts` or `triage-comments.ts`. Parsing and classification are
+  specific to the kind. Each result row carries `kind`.
 
 Thresholds stay with the section that uses them, each with its own policy version (for example
 `check-task-policy@1`), so a decision record always names the policy that made it.
 
 ## Adding a workflow
 
-1. Add `src/workflows/<name>.ts`. Export a `WorkflowInfo` whose `name` is the command name, and a run
-   function with that same name that uses only ports from `workflows/ports.ts` and the `Run` helper. Put
-   thresholds in code with a policy version. Prefer a new section of an existing workflow over a new command.
+1. Add `src/workflows/<name>.ts`. Export a `WorkflowInfo` and a typed run function that uses only ports from
+   `workflows/ports.ts` and the `Run` helper. Put thresholds in code with a policy version. Prefer a new section
+   of an existing workflow over a new routing target.
 2. If it needs a new kind of outside input, add a method to a port and implement it in `adapters/`.
-3. Register it in `src/cli/registry.ts` under that same name, with a summary and a human renderer. Add its
-   usage line and argument handling in `src/cli.ts`.
-4. Add tests with the fake Jev adapter (`adapters/fake-jev.ts`), then run `npm run check`.
+3. Add a fixed outcome and criteria to `src/cli/router.ts`, including a deterministic capability gate. Register
+   the typed target and human renderer in `src/cli/registry.ts`, then add its input handling in `src/cli.ts`.
+4. Add routing and workflow tests with the fake Jev adapter (`adapters/fake-jev.ts`), then run `npm run check`.

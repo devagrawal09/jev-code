@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
-import { createFakeAdapter } from "../src/adapters/fake-jev.ts";
+import { createFakeAdapter, fakeChoice } from "../src/adapters/fake-jev.ts";
+import { ROUTER_OUTCOMES } from "../src/cli/router.ts";
 
 type RunCli = typeof import("../src/cli.ts").runCli;
 
@@ -20,7 +21,20 @@ const write = (path: string, text: string) => {
   mkdirSync(join(root, path, ".."), { recursive: true });
   writeFileSync(join(root, path), text);
 };
-const adapter = createFakeAdapter();
+const adapter = createFakeAdapter((name, _question, request) => {
+  if (name !== "route") return undefined;
+  const prompt = String(request.state.request).toLowerCase();
+  const route = prompt.includes("failure")
+    ? "triage_failures"
+    : prompt.includes("comment")
+      ? "triage_comments"
+      : prompt.includes("find") || prompt.includes("where")
+        ? "find"
+        : prompt.includes("check")
+          ? "check"
+          : "cannot_tell";
+  return fakeChoice(ROUTER_OUTCOMES, route, 0.9);
+});
 
 async function invoke(args: string[]) {
   let stdout = "";
@@ -78,18 +92,22 @@ try {
     args: string[];
     expect: number;
     json?: boolean;
+    workflow?: string;
     error?: RegExp;
     sections?: string[];
   }> = [
     { args: ["--help"], expect: 0 },
-    { args: ["check", "--help"], expect: 0 },
-    { args: ["triage", "--help"], expect: 0 },
-    { args: ["find", "--help"], expect: 0 },
-    { args: ["check"], expect: 64 },
-    { args: ["check", "--task", "fix add overflow", "--json"], expect: 0, json: true },
+    { args: [], expect: 64 },
+    { args: ["Do something vague"], expect: 64 },
+    {
+      args: ["Check whether the change fixes add overflow", "--json"],
+      expect: 0,
+      json: true,
+      workflow: "check@1",
+    },
     {
       args: [
-        "check",
+        "Check the add overflow change against the task and requirements",
         "--task",
         "fix add overflow",
         "--rules",
@@ -102,21 +120,33 @@ try {
       ],
       expect: 0,
       json: true,
+      workflow: "check@1",
       sections: ["task", "rules", "criteria"],
     },
-    { args: ["check", "--task", "x", "--test-results", "junit.xml"], expect: 64 },
-    { args: ["triage", "--kind", "failures", "--input", "ci.txt", "--json"], expect: 0, json: true },
-    { args: ["triage", "--kind", "comments", "--input", "comments.json", "--json"], expect: 0, json: true },
-    { args: ["triage", "--input", "ci.txt"], expect: 64 },
-    { args: ["triage", "--kind", "failures", "--input", "../outside.log"], expect: 65 },
-    { args: ["find", "where is add implemented", "--json"], expect: 0, json: true },
-    // Removed commands have no aliases.
-    ...["review", "rules", "criteria", "failures", "comments", "ask"].map((removed) => ({
-      args: [removed, "--help"],
-      expect: 64,
-      error: /unknown command/,
-    })),
-    { args: ["check", "--task", "x", "--offline"], expect: 64 },
+    { args: ["Check the results", "--test-results", "junit.xml"], expect: 64 },
+    {
+      args: ["Triage these failures", "--input", "ci.txt", "--json"],
+      expect: 0,
+      json: true,
+      workflow: "triage@1",
+    },
+    {
+      args: ["Triage these comments", "--input", "comments.json", "--json"],
+      expect: 0,
+      json: true,
+      workflow: "triage@1",
+    },
+    { args: ["Triage these failures", "--input", "../outside.log"], expect: 65 },
+    {
+      args: ["Find where add is implemented", "--json"],
+      expect: 0,
+      json: true,
+      workflow: "find@1",
+    },
+    { args: ["Find add", "--rules", "rules.json"], expect: 64 },
+    { args: ["Find add", "--as", "find"], expect: 64 },
+    { args: ["Triage failures", "--kind", "failures", "--input", "ci.txt"], expect: 64 },
+    { args: ["Check the change", "--offline"], expect: 64 },
   ];
 
   let failures = 0;
@@ -135,7 +165,7 @@ try {
         };
         ok =
           packet.schema === "jev-code.packet/v1" &&
-          packet.workflow === `${test.args[0]}@1` &&
+          packet.workflow === test.workflow &&
           packet.advisory === true &&
           Array.isArray(packet.notChecked) &&
           packet.notChecked.length > 0 &&
