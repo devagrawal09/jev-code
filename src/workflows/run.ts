@@ -45,7 +45,9 @@ export interface WorkflowInfo {
   budget: BudgetLimits;
 }
 
-const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+// Gateway model ids are provider-qualified (for example typesafe-ai/jev), so one
+// "/" segment is allowed; TypeSafe ids (jev-1.13.0) keep matching unchanged.
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/;
 
 /** Per-run workflow context: redaction, recording, dispositions, and the packet envelope around the core executor. */
 export class Run {

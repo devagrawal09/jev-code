@@ -1,4 +1,5 @@
 import type { JsonValue } from "../core/types.ts";
+import type { RedactionPort } from "../workflows/ports.ts";
 
 /**
  * Obvious credential shapes. This is a best-effort scrubber, not a secret scanner:
@@ -93,18 +94,35 @@ export function redactJson<T extends JsonValue>(
 }
 
 /** Credential values present in this process that must never leave it. */
-export function envSecrets(): string[] {
+export function envSecrets(env: NodeJS.ProcessEnv = process.env): string[] {
   const values: string[] = [];
-  for (const name of ["TYPESAFE_API_KEY", "COPILOT_MCP_TYPESAFE_API_KEY"]) {
-    const value = process.env[name];
+  for (const name of ["TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY", "COPILOT_MCP_TYPESAFE_API_KEY"]) {
+    const value = env[name];
     if (value && value.trim().length >= 8) values.push(value.trim());
   }
   return values;
 }
 
+/**
+ * Redaction that always covers both the supplied environment and the live
+ * process environment: a custom environment must not silently lose redaction
+ * of the process's credentials (or vice versa) just because it was passed in.
+ */
+export function createRedaction(
+  env: NodeJS.ProcessEnv = process.env,
+  extraSecrets: readonly string[] = [],
+): RedactionPort {
+  const secrets = [...new Set([...envSecrets(env), ...envSecrets(), ...extraSecrets])];
+  return {
+    json: <T extends JsonValue>(value: T) => redactJson(value, secrets) as { value: T; count: number },
+    text: (value: string) => redactText(value, secrets),
+    message: (error: unknown, max = 300) => safeMessage(error, max, secrets),
+  };
+}
+
 /** Make an error message safe to print: redact and bound its length. */
-export function safeMessage(error: unknown, max = 300): string {
+export function safeMessage(error: unknown, max = 300, extraSecrets?: readonly string[]): string {
   const raw = error instanceof Error ? error.message : String(error);
-  const { text } = redactText(raw);
+  const { text } = extraSecrets ? redactText(raw, extraSecrets) : redactText(raw);
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }

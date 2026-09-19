@@ -35,7 +35,8 @@ A common agent flow asks jev-code to find relevant files before editing, check c
    it into small, size-limited pieces, such as one changed block of a file or one failure from a log.
 3. **Exact checks run first.** Plain rules catch things like an added `test.skip`, deleted assertions,
    deleted test files, and lockfile, CI or config changes.
-4. **Jev answers fixed-choice questions about each piece.** Using your required TypeSafe API key, jev-code asks
+4. **Jev answers fixed-choice questions about each piece.** Using your Jev credential (TypeSafe API key, or
+   an AI Gateway key with `JEV_PROVIDER=vercel`), jev-code asks
    [TypeSafe Jev](https://typesafe.ai), a model that answers multiple-choice questions, about one small piece
    at a time. For example: "How closely is this changed block related to the task?" jev-code's own code, not
    the model, turns the answers into flags using fixed thresholds.
@@ -47,7 +48,9 @@ A common agent flow asks jev-code to find relevant files before editing, check c
 > **Release status:** the `jev-code` package on npm is `0.0.1`, a placeholder with no working commands.
 > This README describes `0.1.0`, which is not released yet. Until it is, build from source.
 
-**Requirements:** Node.js 22.18 or newer, `git`, a Git repository to check, and a TypeSafe API key. CI tests on Linux; Windows is untested.
+**Requirements:** Node.js 22.18 or newer, `git`, a Git repository to check, and a Jev credential:
+either a TypeSafe API key (default provider) or an AI Gateway key (`JEV_PROVIDER=vercel`), per the
+[Jev providers](#jev-providers) section. CI tests on Linux; Windows is untested.
 
 **Install** (from source, until 0.1.0 is on npm):
 
@@ -61,10 +64,12 @@ node dist/cli.js --help   # use "node /path/to/jev-code/dist/cli.js" wherever th
 
 After 0.1.0 is released: `npm install --global jev-code`.
 
-**API key.** jev-code reads the required key only from this environment variable, never from files or flags:
+**API key.** jev-code reads the required key only from environment variables, never from files or flags. Which key it needs depends on the provider (see below):
 
 ```sh
-export TYPESAFE_API_KEY="<your TypeSafe API key>"
+export TYPESAFE_API_KEY="<your TypeSafe API key>"    # default provider (or see Jev providers
+                                                     # for the Vercel AI Gateway alternative)
+export AI_GATEWAY_API_KEY="<your gateway key>"       # JEV_PROVIDER=vercel
 ```
 
 **Example.** An agent was asked to fix a crash. It did, but it also skipped the test and removed an assertion.
@@ -170,7 +175,7 @@ There is no `pass` or `approved` result. Run `jev-code --help` for exit-code mea
 
 By default, run records are saved under `.jev-code/runs/<run-id>/`. They can contain code and log lines, so they are private to your user and ignored by Git. Use `--no-persist` to disable them.
 
-jev-code first sends TypeSafe the redacted request, input shape, diff presence, available capabilities and option names for routing. The selected workflow then sends only the task and bounded evidence it needs, such as changed blocks or short failure-log sections. Obvious secret files and common token formats are filtered on a best-effort basis, but jev-code is not a secret scanner. Review TypeSafe's data terms before sending private or regulated code.
+jev-code first sends TypeSafe the redacted request, input shape, diff presence, available capabilities and option names for routing. The selected workflow then sends only the task and bounded evidence it needs, such as changed blocks or short failure-log sections. Obvious secret files and common token formats are filtered on a best-effort basis, but jev-code is not a secret scanner. With the default provider, requests go to TypeSafe; with `JEV_PROVIDER=vercel`, requests additionally pass through the Vercel AI Gateway, which processes them even under zero-data-retention routing. Review both the gateway's and the upstream provider's data terms before sending private or regulated code.
 
 jev-code does not replace tests, type checks, linters, security tools, or human review.
 
@@ -187,9 +192,57 @@ npm run smoke           # runs the built CLI in a temporary Git repository with 
 npm run check:package   # package manifest and file-list checks used by the release workflow
 ```
 
-`node scripts/smoke-real.ts` makes a few real Jev requests after `npm run build`; it skips itself without
-`TYPESAFE_API_KEY`. See [docs/architecture.md](docs/architecture.md) for how the code is organized and
+`npm run smoke:real` makes a few real TypeSafe Jev requests after `npm run build`; it skips itself
+without `TYPESAFE_API_KEY`. `npm run smoke:vercel` performs one minimal real Jev evaluation through
+the Vercel AI Gateway; it requires `JEV_SMOKE=1` and `AI_GATEWAY_API_KEY` and skips itself otherwise,
+so neither live test is part of `npm run check`. See [docs/architecture.md](docs/architecture.md) for how the code is organized and
 [docs/RELEASING.md](docs/RELEASING.md) for how releases are published.
+
+## Jev providers
+
+Jev inference is pluggable. Both providers expose the same Jev/System One capability to the review
+engine through the same request/response schema, so workflows and reports are provider-independent.
+The providers are different services, though: when the gateway does not report TypeSafe's separate
+confidence statistic, confidence is synthesized from the distribution and threshold-gated decisions
+can differ from TypeSafe-direct (see below). Selection is entirely through configuration, at start:
+
+```sh
+export JEV_PROVIDER=typesafe        # default: direct TypeSafe API
+export TYPESAFE_API_KEY="<key>"
+```
+
+or
+
+```sh
+export JEV_PROVIDER=vercel          # Vercel AI Gateway hosting of Jev
+export AI_GATEWAY_API_KEY="<key>"   # canonical variable read by the ai package
+```
+
+An invalid `JEV_PROVIDER` name fails immediately at startup (exit 64), not halfway through a review.
+
+**Model selection.** `--model` / `TYPESAFE_MODEL` select the TypeSafe-direct model for the default
+provider. The Vercel provider runs in the gateway's model namespace: TypeSafe-direct ids
+(`jev-1.13.0`) are a different namespace and are never forwarded — an unqualified id falls back to
+the configured gateway model, and a slash-qualified gateway id (`typesafe-ai/jev-preview`) is
+honored. The gateway model itself is configured with `JEV_GATEWAY_MODEL` (default `typesafe-ai/jev`,
+the canonical Jev id on the Vercel AI Gateway).
+
+**Zero data retention.** Evaluations can contain repository source code and diffs, so the Vercel
+provider routes only to providers with zero data retention agreements
+(`providerOptions.gateway.zeroDataRetention = true`) by default. Set
+`JEV_GATEWAY_ZERO_DATA_RETENTION=0` only for troubleshooting.
+
+Differences worth knowing:
+
+- TypeSafe's separate per-question confidence statistic is preserved from the gateway response
+  (`providerMetadata.typesafe.confidence`, Choice/Score questions). When that metadata is genuinely
+  unavailable, the provider falls back to a value derived from the reported distribution (the mass
+  of the selected choice, or the maximum level mass for score) — an approximation, not the model's
+  own confidence, so threshold-gated decisions can differ from TypeSafe-direct in that case.
+- Noul/boolean answers carry probability only; TypeSafe reports no separate confidence for them.
+- Usage numbers come from the gateway; when it omits them, input usage is reported as a conservative
+  estimate of the request size (the same estimate the input-token budget reserves), and output usage
+  as zero.
 
 ## TypeSafe
 

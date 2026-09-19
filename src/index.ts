@@ -2,7 +2,18 @@
 
 // adapters: port implementations for a local workspace and the TypeSafe SDK
 export { parseComments } from "./adapters/comments.ts";
-export { configuredModel, jevFromEnvironment } from "./adapters/config.ts";
+export {
+  classifierFor,
+  configuredModel,
+  configuredProvider,
+  createJevProvider,
+  DEFAULT_PROVIDER,
+  InvalidProviderError,
+  jevFromEnvironment,
+  MODEL_ENV,
+  PROVIDER_ENV,
+  type ProviderName,
+} from "./adapters/config.ts";
 export {
   createArtifactStore,
   createEvidenceParser,
@@ -11,10 +22,21 @@ export {
 } from "./adapters/dependencies.ts";
 export { parseUnifiedDiff } from "./adapters/diff.ts";
 export { createFakeAdapter, fakeChoice, fakeNoul, fakeScore } from "./adapters/fake-jev.ts";
-export { classifyError, createSdkAdapter, MissingCredentialError } from "./adapters/jev.ts";
+export {
+  classifyError,
+  createSdkAdapter,
+  MissingCredentialError,
+  TypeSafeJevProvider,
+} from "./adapters/jev.ts";
 export { parseFailureLog } from "./adapters/logs.ts";
 export { redactJson, redactText } from "./adapters/redact.ts";
 export { parseTestRecords } from "./adapters/test-records.ts";
+export {
+  classifyVercelError,
+  createVercelAdapter,
+  GATEWAY_MODEL,
+  VercelJevProvider,
+} from "./adapters/vercel-jev.ts";
 // cli: internal workflow registry and output formatting
 export { EXIT, exitCodeFor, renderHuman } from "./cli/output.ts";
 export { WORKFLOWS, type WorkflowDefinition, type WorkflowName } from "./cli/registry.ts";

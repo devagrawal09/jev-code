@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { stat } from "node:fs/promises";
-import type { JevPort } from "../core/types.ts";
+import type { JevPort, TransportFailure } from "../core/types.ts";
 import type {
   ArtifactStore,
   EvidenceParser,
@@ -15,7 +15,7 @@ import { classifyError } from "./jev.ts";
 import { parseFailureLog } from "./logs.ts";
 import { readLines, resolveWorkspacePath } from "./paths.ts";
 import { Recorder } from "./recorder.ts";
-import { redactJson, redactText, safeMessage } from "./redact.ts";
+import { createRedaction, redactJson, redactText, safeMessage } from "./redact.ts";
 import { parseTestRecords } from "./test-records.ts";
 
 /** Read-only git and filesystem inputs confined to `root`. */
@@ -45,9 +45,8 @@ export function createEvidenceParser(): EvidenceParser {
   };
 }
 
-export function createRedaction(): RedactionPort {
-  return { json: (value) => redactJson(value), text: (value) => redactText(value), message: safeMessage };
-}
+// createRedaction moved to redact.ts (env-aware); re-exported for callers.
+export { createRedaction } from "./redact.ts";
 
 /** Artifacts under `<root>/.jev-code/runs`. */
 export function createArtifactStore(root: string): ArtifactStore {
@@ -63,14 +62,33 @@ export function createRunId(workflow: string): string {
 }
 
 /** Every workflow port implemented for a local workspace. */
-export function createWorkflowDependencies(root: string, jev: JevPort): WorkflowDependencies {
+export function createWorkflowDependencies(
+  root: string,
+  jev: JevPort,
+  classify?: (error: unknown) => TransportFailure,
+  env: NodeJS.ProcessEnv = process.env,
+): WorkflowDependencies {
   return {
     jev,
     source: createWorkspaceSource(root),
     evidence: createEvidenceParser(),
-    redaction: createRedaction(),
+    redaction: createRedaction(env, portSecrets(jev)),
     artifacts: createArtifactStore(root),
-    classifyError,
+    // Prefer the classifier the port itself declares, so a provider-aware
+    // port can never be paired with a foreign classifier by default.
+    classifyError: classify ?? defaultClassifierFor(jev),
     createRunId,
   };
+}
+
+import { portSecrets } from "./jev.ts";
+
+/** The port's own classifier (bound to the port), or the TypeSafe default. */
+function defaultClassifierFor(jev: JevPort): (error: unknown) => TransportFailure {
+  const candidate = (jev as { classifyError?: unknown }).classifyError;
+  // Bind so a method-style classifier keeps the port as `this` when invoked
+  // through the dependencies object.
+  return typeof candidate === "function"
+    ? (candidate as (this: JevPort, error: unknown) => TransportFailure).bind(jev)
+    : classifyError;
 }

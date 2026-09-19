@@ -49,7 +49,7 @@ try {
     ],
     {
       cwd: root,
-      env: process.env,
+      env: { ...process.env, JEV_PROVIDER: "typesafe" },
       encoding: "utf8",
     },
   );
