@@ -1,5 +1,10 @@
 # Architecture
 
+Stanley is a Jev-first, self-improving coding agent. The hot path is deterministic code plus bounded Jev
+judgment; a general coding agent (Pi) is the fallback for unsupported requests, and every fallback queues a
+bounded attempt to write a workflow so the next such request avoids the agent. Design decisions and their
+alternatives are recorded in [decision-log.md](decision-log.md).
+
 The code in `src/` is split into four folders. Imports only point one way:
 
 ```text
@@ -7,20 +12,20 @@ cli  ->  adapters  ->  workflows  ->  core
 ```
 
 A folder may import itself and anything to its right, never anything to its left. When a lower folder needs
-something from the outside world, such as Git or the TypeSafe SDK, it declares an interface (a "port") and a
-higher folder supplies the implementation. `test/architecture.test.ts` scans every import, including
-`import type`, dynamic `import()` and `require()`, and fails the build on a wrong-way import.
+something from the outside world, such as Git, the TypeSafe SDK, or a coding agent, it declares an interface
+(a "port") and a higher folder supplies the implementation. `test/architecture.test.ts` scans every import,
+including `import type`, dynamic `import()` and `require()`, and fails the build on a wrong-way import.
 
 ## One job per folder
 
-| Folder      | Job                                                                                         | Must not use                                                         |
-| ----------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `core`      | Send structured questions to Jev safely: validate answers, enforce budgets, batch, retry     | npm packages, `fs`, `child_process`, the SDK; only `node:` built-ins |
-| `workflows` | Product logic: gather evidence, run exact checks, ask questions, turn answers into a report | any package or Node built-in, `process.env`, the SDK                 |
-| `adapters`  | Real implementations of the ports: read-only Git, file reads, parsers, redaction, SDK client | the `cli` folder                                                     |
-| `cli`       | Parse arguments, wire adapters into workflows, print output, choose the exit code          | nothing                                                              |
+| Folder      | Job                                                                                                     | Must not use                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `core`      | Send structured questions to Jev safely: validate answers, enforce budgets, batch, retry; plugin contract | npm packages, `fs`, `child_process`, the SDK; only `node:` built-ins |
+| `workflows` | Product logic: gather evidence, run exact checks, ask questions, turn answers into a report; agent port and improvement model | any package or Node built-in, `process.env`, the SDK                 |
+| `adapters`  | Real implementations of the ports: read-only Git, file reads, parsers, redaction, SDK client, Pi, the improvement queue | the `cli` folder                                                     |
+| `cli`       | Parse arguments, wire adapters into workflows, route, delegate, print output, choose the exit code      | nothing                                                              |
 
-`src/cli.ts` (the `jev-code` binary) and `src/index.ts` (package exports) belong to `cli`. Every other
+`src/cli.ts` (the `stanley` binary) and `src/index.ts` (package exports) belong to `cli`. Every other
 production file must live in one of the four folders. Tests and scripts may import anything.
 
 ## What happens in a run
@@ -28,68 +33,198 @@ production file must live in one of the four folders. Tests and scripts may impo
 Using `check` as the example:
 
 1. **cli** parses the natural-language request and flags, reads `TYPESAFE_API_KEY` and `TYPESAFE_MODEL`
-   through `adapters/config.ts`, and builds the dependencies in `adapters/dependencies.ts`.
-2. **routing** (`cli/router.ts`) receives the redacted request plus deterministic context: diff presence,
-   input shape, available capabilities, and supplied option names. One validated choice selects `find`,
-   `check`, `triage_failures`, `triage_comments`, or `cannot_tell`. Fixed confidence and capability gates turn
-   uncertain or unavailable choices into `cannot_tell`; the CLI then asks for clarification. The router has no
-   tool access and cannot name an operation outside that enum.
-3. **workflow** (`workflows/check.ts`) validates every input, asks the source port for the diff once, and
+   through `adapters/config.ts`, builds the dependencies in `adapters/dependencies.ts`, and resolves the
+   coding agent from the environment (`adapters/pi.ts`): `null` when `--no-agent`, `STANLEY_AGENT=off`,
+   `STANLEY_NESTED` is set, or no `pi` binary is installed.
+2. **plugin loading** (`adapters/plugins.ts`) discovers trusted `.ts`, `.js`, and package plugins under
+   `.stanley/plugins/`, imports them through `tsx`, awaits their factories, quarantines individual failures,
+   and registers valid plugins beside the ten built-ins. Duplicate IDs fail registration. If validated
+   improvement candidates await review, one stderr line says so; if improvement jobs are pending and no worker
+   is alive, a worker is started (see below).
+3. **routing** (`cli/router.ts`) receives the redacted request plus deterministic context: diff presence,
+   input shape, available capabilities, supplied option names, and JSON routing metadata for every registered
+   workflow. One validated choice selects a candidate or `cannot_tell`. Fixed confidence and capability gates
+   turn uncertain or unavailable choices into the built-in fallback; the *reason* is kept because it decides
+   whether the agent may be used.
+4. **workflow** (`workflows/check.ts`) validates every input, asks the source port for the diff once, and
    has the evidence port parse it into hunks (changed blocks). It skips secret-shaped paths, binaries and
    vendored files, starts one `Run`, and hands the diff to its sections.
-4. **Exact checks** run in code first (`workflows/hunks.ts`, `classify.ts`): skip markers, removed assertions,
+5. **Exact checks** run in code first (`workflows/hunks.ts`, `classify.ts`): skip markers, removed assertions,
    deleted tests, lockfile, CI and config changes. Some pieces are settled here and never reach Jev.
-5. **Questions.** For each remaining piece, the workflow builds a request: a small JSON state plus
+6. **Questions.** For each remaining piece, the workflow builds a request: a small JSON state plus
    fixed-choice questions (yes/no, choice or score). `workflows/run.ts` redacts it and hands it to
    `core/executor.ts`, which reserves budget, calls the Jev port, validates the answer shape and retries
-   transient failures or invalid model responses. If the budget is exhausted or Jev is unavailable during a run, the piece is marked
-   unjudged instead. This lives in `core`, so it is the same for `check`, `triage` and `find`.
-6. **Decisions** are made in code with fixed, versioned thresholds (`workflows/policy.ts`), not by the model.
+   transient failures or invalid model responses. If the budget is exhausted or Jev is unavailable during a
+   run, the piece is marked unjudged instead. This lives in `core`, so it is the same for every workflow.
+7. **Decisions** are made in code with fixed, versioned thresholds (`workflows/policy.ts`), not by the model.
    Unclear answers are "parked" for a human to look at.
-7. **Report.** `Run` builds the `jev-code.packet/v1` packet with coverage, findings, parked items, limits and a
-   non-empty `notChecked` list. `cli/output.ts` prints it as text or JSON and maps the status to an exit code.
+8. **Result.** `Run` builds an internal `stanley.packet/v1` packet. `cli/plugin-output.ts` projects built-in
+   output to workflow-neutral `{ status, output: { text, data } }`; JSON CLI output uses
+   `stanley.prompt-result/v1` and omits workflow and run identity. Raw plugin text/JSON is normalized to
+   `{ status: "complete", output }`.
+
+On this path the coding agent is never invoked, nothing is queued, and no worker is started; the smoke test and
+`test/agent.test.ts` assert exactly that.
+
+## The agent fallback
+
+When step 3 finds no workflow, `cli.ts` decides between two fallbacks:
+
+- **Delegate** (`workflows/agent.ts`, `adapters/pi.ts`) when an agent is available, the shared budget is not
+  exhausted, and the request is *confidently* unsupported: an action request (`implement`, `fix`, `deploy`,
+  `run the tests`, …) that no plugin claims, or a request the router explicitly placed outside every workflow.
+  The agent receives `delegationInstructions(request, input)` on stdin, the invocation's abort signal, and a
+  wall-clock limit (`--agent-timeout-seconds`, default 600 s). `delegationResult()` turns the run into the
+  same `PromptResult` envelope: `complete` only when the agent finished its turn, `incomplete` on timeout,
+  cancellation or failure, always prefixed "handled by an external coding agent; Stanley did not verify the
+  result", with `output.data.handledBy = "coding_agent"` and a `notChecked` list. Exit codes follow the status.
+- **Explain** (unchanged) for everything else: uncertain routing, capability-gated routing (for example `check`
+  with no diff), routing errors, budget exhaustion, `--no-agent`, nested invocations, or no installed agent.
+  Implement/fix requests still get the read-only relevant-code analysis with `status: "unsupported"`.
+
+Nested `prompt()` calls never delegate; an agent is not a composable sub-workflow. Every agent subprocess runs
+with `STANLEY_NESTED=1`, so an agent that runs `stanley` itself gets a Stanley that cannot delegate or queue.
+
+The plugin directory is guarded around every delegation: `cli.ts` fingerprints `.stanley/plugins/` before and
+after the agent run. Files the agent added are moved to `.stanley/quarantine/<stamp>/` (never deleted) and
+files it modified or removed are reported; both appear as stderr warnings and in the result's `notChecked`. A
+task agent can therefore edit the repository but cannot silently activate a workflow; activation stays with
+`--promote-candidate`.
+
+`CodingAgentPort` is the seam: `adapters/pi.ts` spawns `pi --mode json --print --no-session --no-approve`
+and reads Pi's JSON event lines (`tool_execution_start` counts tool calls; the last assistant `message_end`
+is the result; `stopReason: "error"` is a failure). `adapters/fake-agent.ts` is the deterministic port used by
+every test and the smoke run. No test runs Pi or any model.
+
+## The improvement loop
+
+After a delegated run, `cli.ts` creates an `ImprovementJob` (`workflows/improve.ts`) from the redacted
+request and hands it to `adapters/improvements.ts`:
+
+```text
+.stanley/improvements/pending/<job>.json   written before the CLI returns; exclusive create, one per request
+.stanley/improvements/active/<job>.json    claimed by a worker with a pid + lease; stale leases are re-queued
+.stanley/improvements/done/<job>.json      finished; never queued again automatically
+.stanley/improvements/worker.lock          one worker per repository (pid-stamped, dead pids are stale)
+.stanley/improvements/worker.log           append-only worker diary
+.stanley/candidates/<job>/                 the agent's workflow file plus host-written candidate.json
+```
+
+**Lifecycle.** The CLI starts `node cli.js --improve-worker --repo <root>` detached (`stdio: "ignore"`,
+`unref()`), so the worker outlives the CLI process. The worker acquires the lock, re-queues abandoned jobs,
+claims pending jobs one at a time, and exits when the queue is empty. Any later CLI run that sees pending jobs
+and no live worker starts one, so a killed worker never strands the queue. `stanley --improve-worker` runs the
+same loop in the foreground; that is what the smoke test and `test/improvements.test.ts` use.
+
+**One job.** The worker snapshots `git status` and the worktree diff, runs the agent with
+`improvementInstructions()`, a brief that states the plugin contract, the Jev-first design rule, the reserved
+ids, the active plugins as examples, and the shipped reference workflow (`examples/plugins/stale-todo-audit.ts`,
+byte-identical to the embedded copy), and tells the agent to write exactly one file under
+`.stanley/candidates/<job>/` or nothing. It then validates:
+
+1. the candidate directory loads through `loadPlugins()` with exactly one valid plugin and no quarantine;
+2. the id is not a built-in or active plugin id;
+3. nothing outside the candidate directory changed (new status entries or a changed worktree diff), checked
+   after the agent run *and again after the candidate module was imported and its factory awaited*, because
+   loading executes agent-authored top-level code; such changes are reported, never reverted;
+4. optionally, the router selects the candidate for the original request (`routeCheck`).
+
+The record `candidate.json` is `validated` or `rejected` with reasons. A job whose agent timed out or crashed
+without writing outside its directory is retried once; every other outcome is final. A candidate's `run` never
+executes before promotion; its module top level and factory execute during validation and promotion, exactly as
+any plugin load does.
+
+**Activation is explicit.** `stanley --promote-candidate <id>` re-validates the candidate, refuses duplicate
+ids and existing destinations, and moves the file into `.stanley/plugins/`, the only part of `.stanley/` that
+Git sees. From then on the promoted workflow is an ordinary trusted plugin: the router selects it, it runs
+deterministic code, and it asks Jev through `judge`. Nothing is activated automatically.
+
+## Plugins, `prompt`, and `judge`
+
+Built-ins, repository plugins, and promoted candidates share one `WorkflowRegistry`, one `PromptResult`
+envelope, and one budget tree. A plugin `run` receives `{ request, input, root, prompt, judge, signal, log }`:
+
+- `prompt(instructions, input?)` composes by intent: the router picks whichever available workflow fits.
+- `judge({ scope, state, questions })` asks Jev bounded fixed-choice questions (`noul`, `choice`, `score`)
+  about evidence the plugin supplies. `cli/judge.ts` builds it on the same `FrameExecutor` built-ins use, with
+  request validation (`core/plugin.ts`), redaction, the shared budget, answer validation
+  (`core/validation.ts#readAnswers`), and a cap of 64 calls per run and 8 questions per call. It returns
+  `{ ok: true, answers }` or `{ ok: false, reason }` and never throws.
 
 ## Why core is thin
 
-`core` knows nothing about diffs, logs, tests, findings, files, redaction rules or the SDK. It only knows how to
-send a question set through a `JevPort`, check the reply against the questions asked, and stay within request,
-token and time budgets. Keeping product meaning out of `core` means every workflow gets the same budget,
-retry and validation behavior, and `core` can be tested with a fake port and no I/O.
+`core` knows nothing about diffs, logs, tests, findings, files, redaction rules, agents or the SDK. It only
+knows how to send a question set through a `JevPort`, check the reply against the questions asked, stay within
+request, token and time budgets, and validate the plugin control envelope. Keeping product meaning out of
+`core` means every workflow and every `judge` call gets the same budget, retry and validation behavior, and
+`core` can be tested with a fake port and no I/O.
+
+Built-ins use Jev as a probabilistic zero-shot classifier and ranker, not as a code-writing or free-form review
+agent. Frames present bounded evidence and explicit labels. Built-ins retain distributions and combine related
+probability mass in code. The separate intent router may select a trusted action-capable plugin.
 
 ## Safety boundaries
 
-- **Read-only on the repository.** The Git adapter runs read-only commands. File reads stay inside the
-  workspace and refuse credential-shaped paths. The only writes are run records under `.jev-code/`.
-- **Workflows cannot reach the outside world directly.** They cannot import `fs`, `child_process`, the SDK or
-  `process.env`, so every side effect goes through a port that the architecture test can see.
-- **Everything sent or stored is redacted first**, through `RedactionPort` for requests and the recorder for
-  files. Redaction is best effort, not a secret scanner.
+- **Built-ins are read-only on the repository.** The Git adapter runs read-only commands (`status` included).
+  File reads stay inside the workspace and refuse credential-shaped paths. Built-in writes are run records
+  under `.stanley/`.
+- **Built-in workflows cannot reach the outside world directly.** They cannot import `fs`, `child_process`, the
+  SDK or `process.env`, so every side effect goes through a port that the architecture test can see.
+- **Host-managed routing, built-in evidence, `judge` state, agent output, and improvement records are redacted
+  first**, through `RedactionPort` and the recorder. Redaction is best effort, not a secret scanner; trusted
+  plugins control their own I/O.
 - **Repository text is untrusted evidence.** Workflows ask Jev whether a piece contains text aimed at an
-  automated reviewer and flag it. That is a hint, not a prompt-injection defense. Answers never trigger actions,
-  and the CLI accepts no caller-written questions, workflow choices or actions.
-- **Budgets are hard stops.** When a request, input-token or time limit is reached, no more requests are sent.
+  automated reviewer and flag it. That is a hint, not a prompt-injection defense. Built-in evidence answers never
+  trigger actions; only intent routing can select an explicitly trusted plugin.
+- **Plugins are explicitly trusted.** Repository plugins run in-process and may use filesystem, shell, network,
+  environment, and Git APIs directly. They are offered mutating requests before the fallback. Users must review
+  plugin source as they would any repository script. Promotion is the moment an agent-authored candidate
+  becomes trusted, which is why it is manual.
+- **The coding agent is trusted like a plugin and bounded like a workflow.** It is enabled only by installing
+  Pi (or `STANLEY_PI_BIN`), can be disabled per run or per environment, receives a hard time limit and the
+  invocation's abort signal, and cannot recurse into another delegation. Stanley never claims to have
+  verified its work.
+- **Fallbacks do not claim completion.** Without an agent, unsupported implementation requests may run bounded
+  `find` analysis, but the outer status remains `unsupported`. With an agent, the status reflects only whether
+  the agent finished, and the text says so.
+- **Budgets are shared hard stops.** Routing, every nested built-in executor, and every `judge` call reserve
+  from one top-level request-count, input-token, and wall-clock budget. One tree also allows at most eight
+  nested prompt levels and 32 child calls, with active-stack cycle detection.
+- **Improvement work is confined and reviewed.** The improvement agent may only write into its candidate
+  directory; writes elsewhere, including writes made while the candidate module is imported for validation,
+  reject the candidate (and are reported, not reverted). A candidate's `run` never executes until promoted.
+- **What is and is not redacted.** Instructions handed to an agent are verbatim (the agent needs the exact
+  task and runs as the user); everything that comes back and is shown or persisted is redacted.
 
 ## Records
 
-Unless `--no-persist` is set, `adapters/recorder.ts` writes `.jev-code/runs/<run-id>/`: `manifest.json`,
-`inputs.json`, `candidates.json`, `packet.json`, and when relevant `decisions.ndjson`, `events.ndjson` and
-`frames.ndjson` (every Jev request and response). Files are `0600`, directories `0700`, and
-`.jev-code/.gitignore` contains `*`.
+For built-in workflow runs, unless `--no-persist` is set, `adapters/recorder.ts` writes
+`.stanley/runs/<run-id>/`: `manifest.json`, `inputs.json`, `candidates.json`, `packet.json`, and when relevant
+`decisions.ndjson`, `events.ndjson` and `frames.ndjson` (every Jev request and response). Files are `0600`,
+directories `0700`. `.stanley/.gitignore` ignores generated state (`runs/`, `improvements/`, `candidates/`)
+while explicitly allowing `plugins/` to be committed.
 
 ## Routing targets, workflows and sections
 
-The public CLI has no workflow subcommands or explicit route override. Its four internal targets are safe,
-typed entry points in `cli/registry.ts`:
+The public CLI has no workflow subcommands or explicit route override. Its ten built-in targets are safe,
+typed entry points in `cli/registry.ts`; repository plugins and promoted candidates join the same registry
+dynamically:
 
-| Router target      | Module                | Function           | Run info | Packet `workflow` |
-| ------------------ | --------------------- | ------------------ | -------- | ----------------- |
-| `find`             | `workflows/find.ts`   | `find()`           | `FIND`   | `find@1`          |
-| `check`            | `workflows/check.ts`  | `check()`          | `CHECK`  | `check@1`         |
-| `triage_failures`  | `workflows/triage.ts` | `triageFailures()` | `TRIAGE` | `triage@1`        |
-| `triage_comments`  | `workflows/triage.ts` | `triageComments()` | `TRIAGE` | `triage@1`        |
+| Router target          | Module                       | Function                | Packet `workflow`         |
+| ---------------------- | ---------------------------- | ----------------------- | ------------------------- |
+| `find`                 | `workflows/find.ts`          | `find()`                | `find@1`                  |
+| `check`                | `workflows/check.ts`         | `check()`               | `check@1`                 |
+| `triage_failures`      | `workflows/triage.ts`        | `triageFailures()`      | `triage@1`                |
+| `triage_comments`      | `workflows/triage.ts`        | `triageComments()`      | `triage@1`                |
+| `review`               | `workflows/analyze-diff.ts` | `review()`              | `review@1`                |
+| `test_gaps`            | `workflows/analyze-diff.ts` | `testGaps()`            | `test_gaps@1`             |
+| `summarize`            | `workflows/analyze-diff.ts` | `summarize()`           | `summarize@1`             |
+| `security_review`      | `workflows/analyze-diff.ts` | `securityReview()`      | `security_review@1`       |
+| `performance_review`   | `workflows/analyze-diff.ts` | `performanceReview()`   | `performance_review@1`    |
+| `compatibility_review` | `workflows/analyze-diff.ts` | `compatibilityReview()` | `compatibility_review@1`  |
 
-`cannot_tell` is a router outcome, not a workflow. It returns a clarification error without starting a run.
-`test/cli.test.ts` fixes the routing-target set and exercises each typed entry point.
+`cannot_tell` is an internal router outcome, not a public workflow result. It invokes the fallback described
+above. `test/cli.test.ts` fixes the built-in target set and exercises each typed entry point.
 
 `check` and `triage` are built from **sections**. A section is not a workflow: it has no `WorkflowInfo`, never
 starts a `Run`, and never loads a diff. The workflow does those once and passes them in. A section plans its
@@ -102,11 +237,20 @@ into the single packet.
 - `triageFailures()` and `triageComments()` fix the input kind before calling the shared `triage` workflow,
   which runs exactly one of `triage-failures.ts` or `triage-comments.ts`. Parsing and classification are
   specific to the kind. Each result row carries `kind`.
+- Six diff-analysis entry points share `analyze-diff.ts`, but each fixes a distinct taxonomy, policy, run name
+  and router target. Jev classifies one hunk at a time. Code combines probability mass across related concern
+  labels, applies importance and evidence gates, and parks material concerns that need outside context. A
+  deterministic mode-specific priority controls bounded `--max-hunks` runs.
 
 Thresholds stay with the section that uses them, each with its own policy version (for example
 `check-task-policy@1`), so a decision record always names the policy that made it.
 
 ## Adding a workflow
+
+The preferred way is a plugin file: write `.stanley/plugins/<id>.ts` in the shape of
+`examples/plugins/stale-todo-audit.ts` (deterministic evidence, `judge` for the fixed-choice parts, code for
+the decision), or let the improvement loop draft one and promote it after review. Add a built-in only when the
+workflow needs typed CLI options or sections:
 
 1. Add `src/workflows/<name>.ts`. Export a `WorkflowInfo` and a typed run function that uses only ports from
    `workflows/ports.ts` and the `Run` helper. Put thresholds in code with a policy version. Prefer a new section
@@ -114,4 +258,5 @@ Thresholds stay with the section that uses them, each with its own policy versio
 2. If it needs a new kind of outside input, add a method to a port and implement it in `adapters/`.
 3. Add a fixed outcome and criteria to `src/cli/router.ts`, including a deterministic capability gate. Register
    the typed target and human renderer in `src/cli/registry.ts`, then add its input handling in `src/cli.ts`.
-4. Add routing and workflow tests with the fake Jev adapter (`adapters/fake-jev.ts`), then run `npm run check`.
+4. Add routing and workflow tests with the fake Jev adapter (`adapters/fake-jev.ts`) and, where an agent is
+   involved, the fake agent (`adapters/fake-agent.ts`), then run `npm run check`.

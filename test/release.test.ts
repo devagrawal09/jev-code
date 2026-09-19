@@ -15,9 +15,9 @@ import {
 } from "../scripts/release-checks.ts";
 
 const manifest = {
-  name: "jev-code",
+  name: "stanley-code",
   version: "0.1.0",
-  repository: { type: "git", url: "git+https://github.com/devagrawal09/jev-code.git" },
+  repository: { type: "git", url: "git+https://github.com/devagrawal09/stanley-code.git" },
 };
 
 describe("release tag and manifest", () => {
@@ -44,9 +44,9 @@ describe("release tag and manifest", () => {
     assert.match(checkTag("0.1.0", manifest).join("\n"), /must be v followed by/);
   });
 
-  test("package name must be exactly jev-code", () => {
-    for (const name of ["jev-code-cli", "@devagrawal09/jev-code", "Jev-Code", undefined]) {
-      assert.match(checkManifest({ ...manifest, name }).join("\n"), /name must be exactly "jev-code"/);
+  test("package name must be exactly stanley-code", () => {
+    for (const name of ["stanley", "jev-code", "@devagrawal09/stanley", "Stanley-Code", undefined]) {
+      assert.match(checkManifest({ ...manifest, name }).join("\n"), /name must be exactly "stanley-code"/);
     }
   });
 
@@ -55,10 +55,13 @@ describe("release tag and manifest", () => {
   });
 
   test("repository must be the https GitHub URL npm provenance compares against", () => {
-    assert.equal(githubRepository(manifest.repository), "devagrawal09/jev-code");
-    assert.equal(githubRepository("https://github.com/devagrawal09/jev-code"), "devagrawal09/jev-code");
-    assert.equal(githubRepository("git@github.com:devagrawal09/jev-code.git"), null);
-    assert.equal(githubRepository("devagrawal09/jev-code"), null);
+    assert.equal(githubRepository(manifest.repository), "devagrawal09/stanley-code");
+    assert.equal(
+      githubRepository("https://github.com/devagrawal09/stanley-code"),
+      "devagrawal09/stanley-code",
+    );
+    assert.equal(githubRepository("git@github.com:devagrawal09/stanley-code.git"), null);
+    assert.equal(githubRepository("devagrawal09/stanley-code"), null);
     assert.match(checkManifest({ ...manifest, repository: undefined }).join("\n"), /repository must point/);
     assert.match(
       checkManifest({ ...manifest, repository: "https://github.com/someone/jev-code" }).join("\n"),

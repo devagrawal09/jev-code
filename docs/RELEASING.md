@@ -1,7 +1,7 @@
 # Releasing
 
 Publishing a GitHub Release for tag `vX.Y.Z` runs [`.github/workflows/release.yml`](../.github/workflows/release.yml),
-which publishes `jev-code` to npm with **trusted publishing (OIDC) and provenance**. There is no npm token in
+which publishes `stanley-code` to npm with **trusted publishing (OIDC) and provenance**. There is no npm token in
 this repository or its secrets, and none should ever be added.
 
 CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs `npm run check` on Node 22.18.0, 22 and 24
@@ -9,14 +9,14 @@ for every pull request and push to `main`, plus `npm run check:package`, the sam
 
 ## One-time setup: npm trusted publisher
 
-You need owner access to `jev-code` on npmjs.com, with 2FA on your account. At
-<https://www.npmjs.com/package/jev-code/access>, under **Trusted Publisher**, choose **GitHub Actions** and enter
+You need owner access to `stanley-code` on npmjs.com, with 2FA on your account. At
+<https://www.npmjs.com/package/stanley-code/access>, under **Trusted Publisher**, choose **GitHub Actions** and enter
 exactly (case-sensitive):
 
 | Field                | Value          |
 | -------------------- | -------------- |
 | Organization or user | `devagrawal09` |
-| Repository           | `jev-code`     |
+| Repository           | `stanley-code` |
 | Workflow filename    | `release.yml`  |
 | Environment name     | `npm`          |
 
@@ -24,11 +24,11 @@ The workflow filename is the file name only, not the full path. The environment 
 on the `publish` job. Equivalent CLI (npm >= 11.10.0, run by a package owner):
 
 ```sh
-npm trust github jev-code --repository devagrawal09/jev-code --file release.yml --environment npm --allow-publish
-npm trust list jev-code
+npm trust github stanley-code --repository devagrawal09/stanley-code --file release.yml --environment npm --allow-publish
+npm trust list stanley-code
 ```
 
-npm allows one trusted publisher per package; run `npm trust revoke jev-code --id <id>` before changing it.
+npm allows one trusted publisher per package; run `npm trust revoke stanley-code --id <id>` before changing it.
 
 **After the first successful trusted publish:** under **Settings → Publishing access**, select **Require
 two-factor authentication and disallow tokens**, and revoke any npm automation or publish tokens used for
@@ -36,7 +36,7 @@ two-factor authentication and disallow tokens**, and revoke any npm automation o
 
 ## One-time setup: GitHub environment `npm`
 
-Configure it at <https://github.com/devagrawal09/jev-code/settings/environments> before the first release:
+Configure it at <https://github.com/devagrawal09/stanley-code/settings/environments> before the first release:
 
 - **Deployment branches and tags:** "Selected branches and tags", with a **tag** rule `v*`.
 - **Required reviewers (optional):** add yourself to approve each publish before the job gets its OIDC token.
@@ -70,14 +70,14 @@ Configure it at <https://github.com/devagrawal09/jev-code/settings/environments>
    ```
 
 4. **Watch the Release workflow.** Approve the `publish` job if reviewers are required. When it finishes,
-   <https://www.npmjs.com/package/jev-code/v/0.1.0> shows the version with a provenance badge.
+   <https://www.npmjs.com/package/stanley-code/v/0.1.0> shows the version with a provenance badge.
 
 ## What the workflow checks
 
 Job `verify` (`contents: read`, no OIDC token) stops the release before anything is published unless:
 
 1. The tag is `v` + a stable `X.Y.Z` that equals `v` + `package.json` `version`.
-2. `package.json` `name` is `jev-code` and `repository.url` is `https://github.com/devagrawal09/jev-code`
+2. `package.json` `name` is `stanley-code` and `repository.url` is `https://github.com/devagrawal09/stanley-code`
    (npm rejects provenance otherwise).
 3. `HEAD` is the tag commit (`GITHUB_SHA`, ref `refs/tags/<tag>`), the tree is clean, and the commit is reachable
    from `origin/main`.
@@ -113,7 +113,7 @@ Check logic lives in [`scripts/release-checks.ts`](../scripts/release-checks.ts)
 | Environment approval rejected                                   | No         | Re-run the workflow when ready.                                                                          |
 | `npm publish` E404/E403 (trusted publisher mismatch) or OIDC    | No         | Fix the trusted publisher fields above, then **Re-run failed jobs**. The tarball artifact is kept 30 days. |
 | `npm publish` E422 provenance/repository mismatch               | No         | Fix `package.json` `repository` in a PR and release a new version.                                       |
-| Run fails or times out after `npm publish` reported success     | Yes        | Do not re-tag. Re-running is safe (it stops at "not on npm"). Confirm with `npm view jev-code@X.Y.Z`.    |
+| Run fails or times out after `npm publish` reported success     | Yes        | Do not re-tag. Re-running is safe (it stops at "not on npm"). Confirm with `npm view stanley-code@X.Y.Z`.    |
 
 Re-runs use the workflow and scripts from the tagged commit, so fixes to `release.yml` or `scripts/` apply only
 to a new tag. Never move or reuse a tag whose version is on npm. Deleting a GitHub Release does not unpublish

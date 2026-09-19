@@ -3,8 +3,10 @@
  * human-readable problems; an empty list means the check passed. No I/O happens here so the rules are testable.
  */
 
-export const PACKAGE_NAME = "jev-code";
-export const REPOSITORY = "devagrawal09/jev-code";
+/** npm package name. `stanley` itself is taken on npm by an unrelated package (see docs/decision-log.md). */
+export const PACKAGE_NAME = "stanley-code";
+/** GitHub repository used for release provenance and trusted publishing. */
+export const REPOSITORY = "devagrawal09/stanley-code";
 export const RELEASE_BRANCH = "main";
 export const NPM_REGISTRY = "https://registry.npmjs.org/";
 /** Minimum npm CLI that can publish through npm trusted publishing (OIDC). */

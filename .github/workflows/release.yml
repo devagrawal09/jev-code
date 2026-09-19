@@ -1,6 +1,6 @@
 name: Release
 
-# Publishes jev-code to npm with trusted publishing (OIDC) when a GitHub Release is published.
+# Publishes Stanley to npm with trusted publishing (OIDC) when a GitHub Release is published.
 # Setup and failure handling: docs/RELEASING.md. No npm token is used or accepted.
 
 on:
@@ -16,7 +16,7 @@ concurrency:
 jobs:
   verify:
     name: verify release
-    if: github.repository == 'devagrawal09/jev-code'
+    if: github.repository == 'devagrawal09/stanley-code'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

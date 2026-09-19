@@ -1,20 +1,20 @@
 {
-  "name": "jev-code",
+  "name": "stanley-code",
   "version": "0.1.0",
-  "description": "Experimental judgment tools that coding agents can delegate common tasks to. Check changes against the task, rules and requirements, triage failures and review comments, and find relevant code.",
+  "description": "Stanley: a Jev-first, self-improving coding agent. Deterministic workflows plus bounded TypeSafe Jev judgment, with a Pi coding-agent fallback that teaches Stanley new workflows.",
   "license": "MIT",
   "author": "Dev Agrawal",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/devagrawal09/jev-code.git"
+    "url": "git+https://github.com/devagrawal09/stanley-code.git"
   },
-  "homepage": "https://github.com/devagrawal09/jev-code#readme",
+  "homepage": "https://github.com/devagrawal09/stanley-code#readme",
   "bugs": {
-    "url": "https://github.com/devagrawal09/jev-code/issues"
+    "url": "https://github.com/devagrawal09/stanley-code/issues"
   },
   "type": "module",
   "bin": {
-    "jev-code": "dist/cli.js"
+    "stanley": "dist/cli.js"
   },
   "exports": {
     ".": {
@@ -32,8 +32,10 @@
     "node": ">=22.18"
   },
   "keywords": [
+    "stanley",
     "typesafe",
     "jev",
+    "pi",
     "coding-agents",
     "ai-agents",
     "judgment",
@@ -53,7 +55,8 @@
     "check:package": "npm run build && node scripts/release.ts manifest && node scripts/release.ts pack --dry-run"
   },
   "dependencies": {
-    "@typesafe-ai/sdk": "0.6.0"
+    "@typesafe-ai/sdk": "0.6.0",
+    "tsx": "4.23.13"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
