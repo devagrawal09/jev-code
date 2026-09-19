@@ -31,7 +31,11 @@ export interface FindInput {
   top?: number;
   includeExcerpts?: boolean;
   maxFiles?: number;
+  mode?: "find" | "code_change_fallback";
 }
+
+export const CODE_CHANGE_FALLBACK_NOTICE =
+  "Stanley cannot implement or fix code without a coding agent (install Pi to enable delegation); no files were changed; only read-only relevant-code analysis was run";
 
 export const FIND = {
   name: "find",
@@ -505,6 +509,7 @@ function excerptFrame(task: string, candidate: Candidate, excerpt: Excerpt, prio
 
 export async function find(input: FindInput, options: RunOptions): Promise<Packet<FindResult>> {
   const task = requireTask(input.task);
+  const readOnlyFallback = input.mode === "code_change_fallback";
   const top = Math.min(Math.max(input.top ?? 10, 1), 50);
   const maxFiles = input.maxFiles ?? 3000;
   const tokens = taskTokens(task);
@@ -516,8 +521,9 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
     top,
     maxFiles,
     tracked: inv.tracked,
+    mode: input.mode ?? "find",
   });
-  const limits: string[] = [];
+  const limits: string[] = readOnlyFallback ? [CODE_CHANGE_FALLBACK_NOTICE] : [];
   const findings: Finding[] = [];
   const parked: Parked[] = [];
   const gaps: string[] = [];
@@ -776,6 +782,7 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
       "untracked files are not candidates",
       "files were ranked by metadata unless an excerpt was read",
       "content beyond shown excerpt ranges",
+      ...(readOnlyFallback ? ["implementation and bug fixing"] : []),
     ],
     results: [...shortlist, ...parkedResults, ...failedResults],
     summary: {
@@ -788,6 +795,9 @@ export async function find(input: FindInput, options: RunOptions): Promise<Packe
       returned: shortlist.length,
       noStrongCandidate,
       gaps,
+      ...(readOnlyFallback
+        ? { readOnlyFallback: { requested: "code_change", performed: "find", changedFiles: false } }
+        : {}),
     },
   });
 }

@@ -1,3 +1,5 @@
+import type { Questions } from "./questions.ts";
+
 export class ValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -106,6 +108,30 @@ export function readScore(
     throw new ValidationError(`${key}.score disagrees with its distribution`);
   }
   return { score, confidence, probabilities };
+}
+
+/** A validated answer to one question, tagged by the question type it answered. */
+export type TypedAnswer =
+  | { type: "noul"; probability: number }
+  | ({ type: "choice" } & ChoiceAnswer)
+  | ({ type: "score" } & ScoreAnswer);
+
+/** Validate every answer against the question it answers; exactly the asked keys must be present. */
+export function readAnswers(
+  answers: Record<string, unknown>,
+  questions: Questions,
+): Record<string, TypedAnswer> {
+  const keys = Object.keys(questions);
+  expectKeys(answers, keys);
+  const result: Record<string, TypedAnswer> = {};
+  for (const key of keys) {
+    const question = questions[key]!;
+    if (question.type === "noul") result[key] = { type: "noul", probability: readNoul(answers, key) };
+    else if (question.type === "choice") {
+      result[key] = { type: "choice", ...readChoice(answers, key, Object.keys(question.criteria)) };
+    } else result[key] = { type: "score", ...readScore(answers, key, question.criteria.length) };
+  }
+  return result;
 }
 
 function answerOf(answers: Record<string, unknown>, key: string, type: string): Record<string, unknown> {

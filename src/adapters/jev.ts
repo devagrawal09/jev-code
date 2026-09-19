@@ -3,7 +3,7 @@ import type { JevPort, TransportFailure } from "../core/types.ts";
 
 export class MissingCredentialError extends Error {
   constructor() {
-    super("TYPESAFE_API_KEY is required; set it in the process environment before running jev-code");
+    super("TYPESAFE_API_KEY is required; set it in the process environment before running Stanley");
     this.name = "MissingCredentialError";
   }
 }

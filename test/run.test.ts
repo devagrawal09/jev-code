@@ -141,6 +141,7 @@ describe("run executor", () => {
 
   test("persisted artifacts are complete, private, and redacted", async () => {
     const repo = tempRepo({ "README.md": "x" });
+    repo.write({ ".stanley/.gitignore": "*\n" });
     const secret = "tsk_test_ABCDEFGH12345678";
     const previous = process.env.TYPESAFE_API_KEY;
     process.env.TYPESAFE_API_KEY = secret;
@@ -178,8 +179,15 @@ describe("run executor", () => {
       assert.equal(record.result, "ok");
       assert.equal(record.requestedModel, "jev-1.13.0");
       assert.equal(record.template, "test@1");
-      assert.ok(existsSync(join(repo.root, ".jev-code/.gitignore")));
+      const ignore = join(repo.root, ".stanley/.gitignore");
+      assert.ok(existsSync(ignore));
+      assert.equal(readFileSync(ignore, "utf8"), "*\n!plugins/\n!plugins/**\n");
       assert.equal(repo.git("status", "--porcelain"), "");
+      repo.write({ ".stanley/plugins/example.ts": "export default async () => ({});\n" });
+      assert.equal(
+        repo.git("status", "--porcelain", "--untracked-files=all"),
+        "?? .stanley/plugins/example.ts\n",
+      );
     } finally {
       if (previous === undefined) delete process.env.TYPESAFE_API_KEY;
       else process.env.TYPESAFE_API_KEY = previous;

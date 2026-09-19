@@ -1,4 +1,4 @@
-import type { BudgetLimits } from "../core/budget.ts";
+import type { Budget, BudgetLimits } from "../core/budget.ts";
 import { FrameExecutor, type FrameFailure, type FrameOutcome } from "../core/executor.ts";
 import { createFrame } from "../core/frame.ts";
 import { hashValue } from "../core/hash.ts";
@@ -27,6 +27,8 @@ export interface RunOptions {
   /** Record artifacts through the artifact store. Default true. */
   persist?: boolean;
   budget?: Partial<BudgetLimits>;
+  /** Shared across every Jev executor in one composed invocation tree. */
+  sharedBudget?: Budget;
   concurrency?: number;
   /** Retries for transient failures only. */
   retries?: number;
@@ -71,6 +73,7 @@ export class Run {
       port: dependencies.jev,
       model: this.model,
       budget: { ...workflow.budget, ...definedOnly(options.budget ?? {}) },
+      ...(options.sharedBudget ? { sharedBudget: options.sharedBudget } : {}),
       ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
       ...(options.retries === undefined ? {} : { retries: options.retries }),
       ...(options.requestTimeoutMs === undefined ? {} : { timeoutMs: options.requestTimeoutMs }),

@@ -1,7 +1,7 @@
 import type { Frame, JevUsage, JsonObject, JsonValue } from "../core/types.ts";
 
-export const PACKET_SCHEMA = "jev-code.packet/v1";
-export const RUN_SCHEMA = "jev-code.run/v1";
+export const PACKET_SCHEMA = "stanley.packet/v1";
+export const RUN_SCHEMA = "stanley.run/v1";
 export const DEFAULT_MODEL = "jev-1.13.0";
 
 /** Where a piece of evidence came from. Every packet item and frame carries these. */

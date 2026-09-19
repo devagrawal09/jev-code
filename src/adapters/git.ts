@@ -9,7 +9,7 @@ export class GitError extends Error {
 }
 
 /** Read-only git subcommands this tool may run. Anything else is a programming error. */
-const ALLOWED = new Set(["rev-parse", "diff", "ls-files", "log"]);
+const ALLOWED = new Set(["rev-parse", "diff", "ls-files", "log", "status"]);
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 /**
@@ -121,4 +121,13 @@ export async function collectDiff(root: string, selection: DiffSelection): Promi
 
 export async function trackedFiles(root: string): Promise<string[]> {
   return (await git(root, ["ls-files", "-z", "--cached"])).split("\0").filter(Boolean);
+}
+
+/**
+ * Porcelain status entries (`XY path`) for modified, staged, and untracked files, excluding ignored ones. Used to
+ * detect writes an external agent made outside the directory it was confined to.
+ */
+export async function statusEntries(root: string): Promise<string[]> {
+  const output = await git(root, ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames", "-z"]);
+  return output.split("\0").filter(Boolean);
 }

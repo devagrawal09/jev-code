@@ -13,7 +13,7 @@ if (!process.env.TYPESAFE_API_KEY?.trim()) {
 }
 
 const cli = resolve(import.meta.dirname, "../dist/cli.js");
-const root = mkdtempSync(join(tmpdir(), "jev-code-real-"));
+const root = mkdtempSync(join(tmpdir(), "stanley-real-"));
 const git = (...args: string[]) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
 const write = (path: string, text: string) => {
   mkdirSync(join(root, path, ".."), { recursive: true });

@@ -1,6 +1,6 @@
 node_modules/
 dist/
-.jev-code/
+.stanley/
 .env
 .env.*
 *.log

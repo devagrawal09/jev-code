@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { configuredModel, jevFromEnvironment } from "../src/adapters/config.ts";
 import { createFakeAdapter } from "../src/adapters/fake-jev.ts";
+import { Budget } from "../src/core/budget.ts";
 import { type FrameAttempt, FrameExecutor } from "../src/core/executor.ts";
 import { createFrame } from "../src/core/frame.ts";
 import { noul } from "../src/core/questions.ts";
@@ -87,6 +88,28 @@ describe("core frame executor", () => {
       [true, false],
     );
     assert.deepEqual(denied, [`${frame("b").id}:requests`]);
+  });
+
+  test("multiple executors can reserve from one invocation-tree budget", async () => {
+    const sharedBudget = new Budget({ ...LIMITS, requests: 1 });
+    const first = new FrameExecutor({
+      port: createFakeAdapter(),
+      model: "m",
+      budget: LIMITS,
+      sharedBudget,
+    });
+    const second = new FrameExecutor({
+      port: createFakeAdapter(),
+      model: "m",
+      budget: LIMITS,
+      sharedBudget,
+    });
+
+    assert.equal((await first.run(frame("first"))).ok, true);
+    const denied = await second.run(frame("second"));
+    assert.equal(!denied.ok && denied.reason, "budget");
+    assert.equal(sharedBudget.requests, 1);
+    assert.equal(sharedBudget.exhausted, "requests");
   });
 
   test("invalid model responses are retried within the cap", async () => {

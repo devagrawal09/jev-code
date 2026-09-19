@@ -47,6 +47,8 @@ export interface FrameExecutorOptions<P = unknown> {
   port: JevPort;
   model: string;
   budget: BudgetLimits;
+  /** Share one reservation pool across routing and composed workflow runs. */
+  sharedBudget?: Budget;
   concurrency?: number;
   /** Retries for transient failures only. */
   retries?: number;
@@ -99,7 +101,7 @@ export class FrameExecutor<P = unknown> {
   constructor(options: FrameExecutorOptions<P>) {
     this.options = options;
     this.model = options.model;
-    this.budget = new Budget(options.budget);
+    this.budget = options.sharedBudget ?? new Budget(options.budget);
     this.concurrency = clamp(options.concurrency ?? 4, 1, EXECUTOR_LIMITS.maxConcurrency);
     this.retries = clamp(options.retries ?? 2, 0, EXECUTOR_LIMITS.maxRetries);
     this.timeoutMs = clamp(

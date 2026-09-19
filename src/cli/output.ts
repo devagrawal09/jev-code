@@ -30,7 +30,7 @@ export interface HumanSection {
 export function renderHuman(packet: Packet<unknown>, sections: HumanSection[]): string {
   const c = packet.coverage;
   const out: string[] = [];
-  out.push(`jev-code ${packet.workflow} · ${packet.status} · advisory only`);
+  out.push(`stanley ${packet.workflow} · ${packet.status} · advisory only`);
   out.push(
     `coverage: ${c.candidates} candidates · ${c.judged} judged · ${c.deterministic} deterministic · ${c.excluded} excluded · ${c.parked} parked · ${c.failed} failed · ${c.unjudged} unjudged${c.complete ? "" : " · INCOMPLETE"}`,
   );

@@ -49,7 +49,7 @@ export function createRedaction(): RedactionPort {
   return { json: (value) => redactJson(value), text: (value) => redactText(value), message: safeMessage };
 }
 
-/** Artifacts under `<root>/.jev-code/runs`. */
+/** Artifacts under `<root>/.stanley/runs`. */
 export function createArtifactStore(root: string): ArtifactStore {
   return { open: (runId) => Recorder.open(root, runId) };
 }

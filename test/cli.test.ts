@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import { describe, test } from "node:test";
 import { fakeChoice, fakeNoul, fakeScore } from "../src/adapters/fake-jev.ts";
@@ -11,7 +12,7 @@ import { fake, fixture, type Responder, tempRepo } from "./helpers.ts";
 async function cli(
   root: string,
   args: string[],
-  extra: { adapter?: JevAdapter; stdin?: string; env?: NodeJS.ProcessEnv } = {},
+  extra: { adapter?: JevAdapter; stdin?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
 ) {
   let stdout = "";
   let stderr = "";
@@ -24,7 +25,10 @@ async function cli(
       cwd: root,
       env: extra.env ?? {},
     },
-    extra.adapter ? { adapter: extra.adapter } : {},
+    {
+      ...(extra.adapter ? { adapter: extra.adapter } : {}),
+      ...(extra.signal ? { signal: extra.signal } : {}),
+    },
   );
   return { code, stdout, stderr };
 }
@@ -49,12 +53,26 @@ function repo() {
 }
 
 describe("cli", () => {
-  test("the only internal routing targets are the four typed workflows", () => {
-    assert.deepEqual(Object.keys(WORKFLOWS), ["find", "check", "triage_failures", "triage_comments"]);
+  test("the internal routing targets are the ten typed workflows", () => {
+    assert.deepEqual(Object.keys(WORKFLOWS), [
+      "find",
+      "check",
+      "triage_failures",
+      "triage_comments",
+      "review",
+      "test_gaps",
+      "summarize",
+      "security_review",
+      "performance_review",
+      "compatibility_review",
+    ]);
     assert.equal(WORKFLOWS.find.run.name, "find");
     assert.equal(WORKFLOWS.check.run.name, "check");
     assert.equal(WORKFLOWS.triage_failures.run.name, "triageFailures");
     assert.equal(WORKFLOWS.triage_comments.run.name, "triageComments");
+    assert.equal(WORKFLOWS.review.run.name, "review");
+    assert.equal(WORKFLOWS.test_gaps.run.name, "testGaps");
+    assert.equal(WORKFLOWS.summarize.run.name, "summarize");
   });
 
   test("help exposes one natural-language entry point and no command or override grammar", async () => {
@@ -62,7 +80,7 @@ describe("cli", () => {
     try {
       const help = await cli(r.root, ["--help"]);
       assert.equal(help.code, 0);
-      assert.ok(help.stdout.includes('Usage: jev-code "<request>" [options]'));
+      assert.ok(help.stdout.includes('Usage: stanley "<request>" [options]'));
       assert.match(help.stdout, /Jev routes the request/);
       assert.doesNotMatch(help.stdout, /Commands:|<command>|--as|--kind|--offline/);
       assert.equal((await cli(r.root, [])).code, 64);
@@ -92,7 +110,10 @@ describe("cli", () => {
         { adapter },
       );
       assert.equal(result.code, 0, result.stderr);
-      assert.equal(JSON.parse(result.stdout).workflow, "check@1");
+      const envelope = JSON.parse(result.stdout);
+      assert.equal(envelope.schema, "stanley.prompt-result/v1");
+      assert.equal(envelope.status, "complete");
+      assert.ok(!("workflow" in envelope));
       const routing = adapter.requests[0]!;
       assert.deepEqual(Object.keys(routing.questions), ["route"]);
       const routeQuestion = routing.questions.route!;
@@ -102,7 +123,18 @@ describe("cli", () => {
       assert.deepEqual(routing.state.context, {
         diff: "present",
         input: "none",
-        capabilities: { find: true, check: true, triage_failures: false, triage_comments: false },
+        capabilities: {
+          find: true,
+          check: true,
+          triage_failures: false,
+          triage_comments: false,
+          review: true,
+          test_gaps: true,
+          summarize: true,
+          security_review: true,
+          performance_review: true,
+          compatibility_review: true,
+        },
         options: ["task-source"],
       });
       assert.equal(routing.state.request, "Check whether the change sets a to two");
@@ -111,40 +143,193 @@ describe("cli", () => {
     }
   });
 
-  test("asks for clarification when the route is ambiguous, uncertain, or unavailable", async () => {
+  test("dispatches every specialized diff request to its typed workflow", async () => {
+    const r = repo();
+    const cases: Array<[WorkflowName, string]> = [
+      ["review", "Review these changes for correctness bugs"],
+      ["test_gaps", "What important tests are missing from this diff?"],
+      ["summarize", "Summarize what changed"],
+      ["security_review", "Review this diff for security vulnerabilities"],
+      ["performance_review", "Look for performance regressions in these changes"],
+      ["compatibility_review", "Could this diff break existing API consumers?"],
+    ];
+    try {
+      for (const [workflow, request] of cases) {
+        const result = await cli(r.root, [request, "--max-hunks", "1", "--json", "--no-persist"], {
+          adapter: routed(workflow),
+        });
+        assert.equal(result.code, 0, `${workflow}: ${result.stderr}`);
+        const envelope = JSON.parse(result.stdout);
+        assert.equal(envelope.status, "complete");
+        assert.equal(envelope.output.data.summary.analysis, workflow);
+        assert.ok(!("workflow" in envelope) && !("runId" in envelope.output.data));
+      }
+    } finally {
+      r.cleanup();
+    }
+  });
+
+  test("routes action requests to repository plugins and always cleans them up", async () => {
+    const r = repo();
+    r.write({
+      ".stanley/plugins/fixer.ts": `
+        import { writeFile } from "node:fs/promises";
+        import { join } from "node:path";
+        export default async ({ root, signal: initSignal }: { root: string; signal: AbortSignal }) => ({
+          id: "fixer",
+          instructions: "Use for requests to fix or modify code.",
+          examples: ["Fix the security issue"],
+          authorization: "sensitive-routing-value",
+          async run({ request, input, signal }: { request: string; input?: unknown; signal: AbortSignal }) {
+            return { request, input: input ?? null, changed: true, sameSignal: signal === initSignal };
+          },
+          async cleanup() { await writeFile(join(root, "plugin-cleaned"), "yes"); },
+        });
+      `,
+    });
+    try {
+      const adapter = fake((name, question) => {
+        if (name !== "route" || question.type !== "choice") return undefined;
+        return fakeChoice(Object.keys(question.criteria), "fixer", 0.9);
+      });
+      const result = await cli(r.root, ["Fix the security issue", "--input", "notes/criteria.md", "--json"], {
+        adapter,
+      });
+      assert.equal(result.code, 0, result.stderr);
+      const envelope = JSON.parse(result.stdout);
+      assert.equal(envelope.schema, "stanley.prompt-result/v1");
+      assert.equal(envelope.status, "complete");
+      assert.deepEqual(envelope.output, {
+        request: "Fix the security issue",
+        input: "- a is two\n",
+        changed: true,
+        sameSignal: true,
+      });
+      assert.ok(!("workflow" in envelope));
+      assert.equal(readFileSync(`${r.root}/plugin-cleaned`, "utf8"), "yes");
+      const route = adapter.requests[0]!.questions.route;
+      assert.equal(route?.type, "choice");
+      if (route?.type === "choice") {
+        assert.deepEqual(route.criteria.fixer, {
+          instructions: "Use for requests to fix or modify code.",
+          examples: ["Fix the security issue"],
+          authorization: "[REDACTED:field]",
+        });
+      }
+    } finally {
+      r.cleanup();
+    }
+  });
+
+  test("repository plugins compose built-ins through late-bound nested prompts", async () => {
+    const r = tempRepo({
+      "src/a.ts": "export const a = 1;\n",
+      ".stanley/plugins/orchestrator.ts": `
+        import { writeFile } from "node:fs/promises";
+        import { join } from "node:path";
+        export default async ({ root }: { root: string }) => ({
+          id: "orchestrator",
+          instructions: "Use to prepare a release summary by composing repository analysis.",
+          async run({ request, prompt }: { request: string; prompt: (request: string) => Promise<unknown> }) {
+            await writeFile(join(root, "src/a.ts"), "export const a = 2;\\n");
+            const child = request.includes("nested action")
+              ? "Fix the nested issue"
+              : "Summarize the current diff";
+            return { child: await prompt(child) };
+          },
+        });
+      `,
+    });
+    try {
+      const adapter = fake((name, question) => {
+        if (name !== "route" || question.type !== "choice") return undefined;
+        const labels = Object.keys(question.criteria);
+        return fakeChoice(labels, labels.includes("orchestrator") ? "orchestrator" : "summarize", 0.9);
+      });
+      const result = await cli(r.root, ["Prepare a release summary", "--json", "--no-persist"], { adapter });
+      assert.equal(result.code, 0, result.stderr);
+      const envelope = JSON.parse(result.stdout);
+      assert.equal(envelope.status, "complete");
+      assert.equal(envelope.output.child.status, "complete");
+      assert.match(envelope.output.child.output.text, /^complete - advisory only/);
+      assert.ok(!("workflow" in envelope.output.child));
+      const routes = adapter.requests.filter((request) => request.questions.route !== undefined);
+      assert.equal(routes.length, 2);
+      assert.equal((routes[0]!.state.context as { diff: string }).diff, "absent");
+      assert.equal((routes[1]!.state.context as { diff: string }).diff, "present");
+      const childRoute = routes[1]!.questions.route!;
+      assert.equal(childRoute.type, "choice");
+      if (childRoute.type === "choice") {
+        assert.ok(!("orchestrator" in childRoute.criteria));
+      }
+
+      const blocked = await cli(r.root, ["Prepare nested action", "--json", "--no-persist"], { adapter });
+      assert.equal(blocked.code, 0, blocked.stderr);
+      const blockedChild = JSON.parse(blocked.stdout).output.child;
+      assert.equal(blockedChild.status, "unsupported");
+      assert.match(blockedChild.output.text, /cannot implement or fix code/i);
+    } finally {
+      r.cleanup();
+    }
+  });
+
+  test("returns the built-in fallback when routing is ambiguous, unsupported, or unavailable", async () => {
     const changed = repo();
     const clean = tempRepo({ "src/a.ts": "export const a = 1;\n" });
     try {
       const ambiguous = await cli(changed.root, ["Take a look", "--json"], { adapter: fake() });
       assert.equal(ambiguous.code, 64);
-      assert.match(ambiguous.stderr, /Should jev-code find relevant code, check the current diff/);
-      assert.equal(JSON.parse(ambiguous.stdout).error.kind, "usage");
+      const ambiguousResult = JSON.parse(ambiguous.stdout);
+      assert.equal(ambiguousResult.status, "unsupported");
+      assert.match(ambiguousResult.output.text, /No installed workflow can confidently handle/);
+      assert.equal(ambiguous.stderr, "");
 
       const uncertain = await cli(changed.root, ["Find the relevant code"], {
         adapter: fake((name) => (name === "route" ? fakeChoice(ROUTER_OUTCOMES, "find", 0.4) : undefined)),
       });
       assert.equal(uncertain.code, 64);
+      assert.match(uncertain.stdout, /No installed workflow can confidently handle/);
 
       const unavailable = await cli(clean.root, ["Check my current changes"], { adapter: routed("check") });
       assert.equal(unavailable.code, 64);
-      assert.match(unavailable.stderr, /no current diff/i);
+      assert.match(unavailable.stdout, /no current diff/i);
+
+      const mutationAdapter = routed("security_review");
+      const mutating = await cli(changed.root, ["Fix the security issue", "--json", "--no-persist"], {
+        adapter: mutationAdapter,
+      });
+      assert.equal(mutating.code, 64);
+      assert.equal(mutating.stderr, "");
+      const mutationResult = JSON.parse(mutating.stdout);
+      assert.equal(mutationResult.status, "unsupported");
+      assert.equal(mutationResult.output.data.requested, "code_change");
+      assert.match(mutationResult.output.text, /cannot implement or fix code/i);
+      assert.ok(!("workflow" in mutationResult));
+      assert.ok(mutationAdapter.requests.length > 0);
+      assert.ok(mutationAdapter.requests.every((request) => request.questions.route === undefined));
+
+      const actionAdapter = routed("find");
+      const external = await cli(changed.root, ["Deploy this branch", "--json"], { adapter: actionAdapter });
+      assert.equal(external.code, 64);
+      assert.match(JSON.parse(external.stdout).output.text, /cannot run commands/);
+      assert.equal(actionAdapter.requests.length, 0);
 
       const wrongShape = await cli(changed.root, ["Triage these failures"], {
         adapter: routed("triage_failures"),
         stdin: "ordinary prose, not a failure log",
       });
       assert.equal(wrongShape.code, 64);
-      assert.match(wrongShape.stderr, /not recognized as failures/);
+      assert.match(wrongShape.stdout, /not recognized as failures/);
     } finally {
       changed.cleanup();
       clean.cleanup();
     }
   });
 
-  test("rejects route answers outside the fixed outcome set", async () => {
+  test("falls back when route answers are outside the candidate set", async () => {
     const r = repo();
     try {
-      const adapter = fake((name) =>
+      const outsideRoute: Responder = (name) =>
         name === "route"
           ? {
               type: "choice",
@@ -159,18 +344,28 @@ describe("cli", () => {
                 deploy: 0.95,
               },
             }
-          : undefined,
-      );
-      const result = await cli(r.root, ["Deploy this branch", "--json"], { adapter });
-      assert.equal(result.code, 70);
-      assert.equal(JSON.parse(result.stdout).error.kind, "internal");
-      assert.equal(adapter.requests.length, 1);
+          : undefined;
+      const adapter = fake(outsideRoute);
+      const result = await cli(r.root, ["Explain this code", "--json"], { adapter });
+      assert.equal(result.code, 64);
+      assert.equal(JSON.parse(result.stdout).status, "unsupported");
+      assert.equal(adapter.requests.length, 2);
+
+      const budgetAdapter = fake(outsideRoute);
+      const exhausted = await cli(r.root, ["Explain this code", "--max-requests", "1", "--json"], {
+        adapter: budgetAdapter,
+      });
+      assert.equal(exhausted.code, 12);
+      const budgetResult = JSON.parse(exhausted.stdout);
+      assert.equal(budgetResult.status, "budget_exhausted");
+      assert.match(budgetResult.output.text, /shared requests budget was exhausted/);
+      assert.equal(budgetAdapter.requests.length, 1);
     } finally {
       r.cleanup();
     }
   });
 
-  test("JSON output remains a versioned packet and human output remains advisory", async () => {
+  test("built-in output is versioned, useful, advisory, and implementation-neutral", async () => {
     const r = repo();
     try {
       const adapter = routed("check", (name) =>
@@ -192,18 +387,16 @@ describe("cli", () => {
         { adapter },
       );
       assert.equal(json.code, 0, json.stderr);
-      const packet = JSON.parse(json.stdout);
-      assert.equal(packet.schema, "jev-code.packet/v1");
-      assert.equal(packet.workflow, "check@1");
-      assert.deepEqual(packet.summary.sections, ["task", "rules", "criteria"]);
+      const envelope = JSON.parse(json.stdout);
+      assert.equal(envelope.schema, "stanley.prompt-result/v1");
+      assert.equal(envelope.status, "complete");
+      assert.deepEqual(envelope.output.data.summary.sections, ["task", "rules", "criteria"]);
       assert.deepEqual(
-        [...new Set(packet.results.map((result: { section: string }) => result.section))],
+        [...new Set(envelope.output.data.results.map((result: { section: string }) => result.section))],
         ["task", "rules", "criteria"],
       );
-      assert.equal(packet.advisory, true);
-      assert.equal(packet.artifact, null);
+      assert.match(envelope.output.text, /^complete - advisory only/);
       for (const key of [
-        "status",
         "coverage",
         "findings",
         "parked",
@@ -212,15 +405,15 @@ describe("cli", () => {
         "notChecked",
         "results",
         "summary",
-        "jev",
       ]) {
-        assert.ok(key in packet, key);
+        assert.ok(key in envelope.output.data, key);
       }
-      assert.ok(!("approved" in packet) && !("pass" in packet));
+      assert.ok(!("workflow" in envelope) && !("artifact" in envelope.output.data));
+      assert.ok(!("jev" in envelope.output.data) && !("runId" in envelope.output.data));
 
       const human = await cli(r.root, ["Check whether a is set to two", "--no-persist"], { adapter });
       assert.equal(human.code, 0);
-      assert.match(human.stdout, /^jev-code check@1 · /);
+      assert.match(human.stdout, /^complete - advisory only/);
       assert.match(human.stdout, /advisory only/);
       assert.match(human.stdout, /not an approval/);
       assert.match(human.stdout, /project rules \(no rules supplied\)/);
@@ -241,8 +434,7 @@ describe("cli", () => {
         stdin: fixture("go-failure.txt"),
       });
       assert.equal(stdin.code, 0, stdin.stderr);
-      const triaged = JSON.parse(stdin.stdout);
-      assert.equal(triaged.workflow, "triage@1");
+      const triaged = JSON.parse(stdin.stdout).output.data;
       assert.equal(triaged.summary.kind, "failures");
       assert.equal(triaged.summary.source, "stdin");
       assert.ok(triaged.results.every((result: { kind: string }) => result.kind === "failures"));
@@ -253,7 +445,7 @@ describe("cli", () => {
         stdin: JSON.stringify([{ id: 1, body: "a should be 3", path: "src/a.ts", line: 1 }]),
       });
       assert.equal(comments.code, 0, comments.stderr);
-      assert.match(comments.stdout, /^jev-code triage@1 · /);
+      assert.match(comments.stdout, /^complete - advisory only/);
       assert.match(comments.stdout, /\ncomments:\n/);
     } finally {
       r.cleanup();
@@ -311,7 +503,9 @@ describe("cli", () => {
         adapter: routed("triage_failures"),
       });
       assert.equal(escaped.code, 65);
-      assert.equal(JSON.parse(escaped.stdout).error.kind, "input");
+      const escapedError = JSON.parse(escaped.stdout);
+      assert.equal(escapedError.error.kind, "input");
+      assert.ok(!("workflow" in escapedError));
 
       const secret = await cli(r.root, ["Check the criteria", "--criteria-file", ".env"], {
         adapter: routed("check"),
@@ -340,7 +534,8 @@ describe("cli", () => {
         adapter: leaky,
         env: { TYPESAFE_API_KEY: key },
       });
-      assert.equal(result.code, 70);
+      assert.equal(result.code, 64);
+      assert.equal(JSON.parse(result.stdout).status, "unsupported");
       assert.ok(!result.stdout.includes(key) && !result.stderr.includes(key));
 
       const crash: JevAdapter = {
@@ -356,6 +551,30 @@ describe("cli", () => {
     } finally {
       if (previous === undefined) delete process.env.TYPESAFE_API_KEY;
       else process.env.TYPESAFE_API_KEY = previous;
+      r.cleanup();
+    }
+  });
+
+  test("passes the invocation signal through intent routing", async () => {
+    const r = repo();
+    const controller = new AbortController();
+    let routedSignal: AbortSignal | undefined;
+    const adapter: JevAdapter = {
+      ask: (_request, options) => {
+        routedSignal = options.signal;
+        controller.abort(new Error("stop"));
+        throw controller.signal.reason;
+      },
+    };
+    try {
+      const result = await cli(r.root, ["Find relevant code", "--json"], {
+        adapter,
+        signal: controller.signal,
+      });
+      assert.equal(result.code, 70);
+      assert.equal(routedSignal, controller.signal);
+      assert.ok(!("workflow" in JSON.parse(result.stdout)));
+    } finally {
       r.cleanup();
     }
   });

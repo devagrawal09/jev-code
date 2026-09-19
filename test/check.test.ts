@@ -425,8 +425,8 @@ describe("check: one workflow", () => {
       assert.ok(!packet.notChecked.some((note) => note.includes("supplied)")));
       // Dispositions from every section share one coverage count: 2 hunks + 2 rule pairs + 3 criteria.
       assert.equal(packet.coverage.candidates, 7);
-      assert.equal(repo.git("status", "--porcelain"), before, "only ignored .jev-code artifacts are written");
-      assert.ok(packet.artifact?.startsWith(".jev-code/runs/check-"));
+      assert.equal(repo.git("status", "--porcelain"), before, "only ignored .stanley artifacts are written");
+      assert.ok(packet.artifact?.startsWith(".stanley/runs/check-"));
     } finally {
       repo.cleanup();
     }

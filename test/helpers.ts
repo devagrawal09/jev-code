@@ -17,7 +17,7 @@ export interface TempRepo {
 }
 
 export function tempRepo(files: Record<string, string> = {}): TempRepo {
-  const root = mkdtempSync(join(tmpdir(), "jev-code-test-"));
+  const root = mkdtempSync(join(tmpdir(), "stanley-test-"));
   const repo: TempRepo = {
     root,
     write(entries) {
