@@ -1,11 +1,12 @@
 import type { JevPort, TransportFailure } from "../core/types.ts";
+import { classifyCloudflareError, createCloudflareAdapter } from "./cloudflare-jev.ts";
 import { classifyError, createSdkAdapter } from "./jev.ts";
 import { classifyVercelError, createVercelAdapter } from "./vercel-jev.ts";
 
 export const MODEL_ENV = "TYPESAFE_MODEL";
 export const PROVIDER_ENV = "JEV_PROVIDER";
 export const DEFAULT_PROVIDER = "typesafe";
-export const PROVIDER_NAMES = ["typesafe", "vercel"] as const;
+export const PROVIDER_NAMES = ["typesafe", "vercel", "cloudflare"] as const;
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 
 export class InvalidProviderError extends Error {
@@ -36,6 +37,7 @@ export function configuredProvider(env: NodeJS.ProcessEnv): ProviderName {
 /** Create the configured Jev provider. */
 export function createJevProvider(name: ProviderName, env: NodeJS.ProcessEnv): JevPort {
   if (name === "vercel") return createVercelAdapter(env);
+  if (name === "cloudflare") return createCloudflareAdapter(env);
   return createSdkAdapter(env);
 }
 
@@ -47,5 +49,6 @@ export function jevFromEnvironment(env: NodeJS.ProcessEnv): JevPort {
 /** The error classifier of the selected provider. */
 export function classifierFor(name: ProviderName): (error: unknown) => TransportFailure {
   if (name === "vercel") return classifyVercelError;
+  if (name === "cloudflare") return classifyCloudflareError;
   return classifyError;
 }

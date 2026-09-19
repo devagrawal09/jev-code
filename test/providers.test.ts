@@ -56,7 +56,7 @@ describe("provider selection", () => {
     assert.throws(() => configuredProvider({ JEV_PROVIDER: "openrouter" }), InvalidProviderError);
     assert.throws(
       () => configuredProvider({ JEV_PROVIDER: "Vercel" }),
-      /JEV_PROVIDER must be one of typesafe, vercel/,
+      /JEV_PROVIDER must be one of typesafe, vercel, cloudflare/,
     );
   });
 
@@ -649,7 +649,7 @@ describe("provider selection through the CLI", () => {
         env: { JEV_PROVIDER: "openrouter", TYPESAFE_API_KEY: "tsk_test" },
       });
       assert.equal(code, 64);
-      assert.match(stderr, /JEV_PROVIDER must be one of typesafe, vercel/);
+      assert.match(stderr, /JEV_PROVIDER must be one of typesafe, vercel, cloudflare/);
     } finally {
       r.cleanup();
     }

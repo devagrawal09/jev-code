@@ -17,7 +17,7 @@ higher folder supplies the implementation. `test/architecture.test.ts` scans eve
 | ----------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `core`      | Send structured questions to Jev safely: validate answers, enforce budgets, batch, retry     | npm packages, `fs`, `child_process`, the SDK; only `node:` built-ins |
 | `workflows` | Product logic: gather evidence, run exact checks, ask questions, turn answers into a report | any package or Node built-in, `process.env`, the SDK                 |
-| `adapters`  | Real implementations of the ports: read-only Git, file reads, parsers, redaction, Jev providers (TypeSafe SDK, Vercel AI Gateway) | the `cli` folder                                                     |
+| `adapters`  | Real implementations of the ports: read-only Git, file reads, parsers, redaction, Jev providers (TypeSafe SDK, Vercel AI Gateway, Cloudflare Workers AI) | the `cli` folder                                                     |
 | `cli`       | Parse arguments, wire adapters into workflows, print output, choose the exit code          | nothing                                                              |
 
 `src/cli.ts` (the `jev-code` binary) and `src/index.ts` (package exports) belong to `cli`. Every other
@@ -28,9 +28,11 @@ production file must live in one of the four folders. Tests and scripts may impo
 Using `check` as the example:
 
 1. **cli** parses the natural-language request and flags, reads `JEV_PROVIDER`, `TYPESAFE_API_KEY`,
-   `AI_GATEWAY_API_KEY` and `TYPESAFE_MODEL` through `adapters/config.ts`, and builds the dependencies
+   `AI_GATEWAY_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and `TYPESAFE_MODEL`
+   through `adapters/config.ts`, and builds the dependencies
    in `adapters/dependencies.ts`. The provider factory selects `TypeSafeJevProvider` (direct API,
-   default) or `VercelJevProvider` (Vercel AI Gateway); unknown provider names fail at startup.
+   default), `VercelJevProvider` (Vercel AI Gateway), or `CloudflareJevProvider` (Cloudflare Workers
+   AI REST run endpoint); unknown provider names fail at startup.
 2. **routing** (`cli/router.ts`) receives the redacted request plus deterministic context: diff presence,
    input shape, available capabilities, and supplied option names. One validated choice selects `find`,
    `check`, `triage_failures`, `triage_comments`, or `cannot_tell`. Fixed confidence and capability gates turn

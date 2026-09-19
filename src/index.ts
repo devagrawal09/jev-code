@@ -1,5 +1,11 @@
 // Public package API. This module is the top of the dependency graph; no production module imports it.
 
+export {
+  CLOUDFLARE_MODEL,
+  CloudflareJevProvider,
+  classifyCloudflareError,
+  createCloudflareAdapter,
+} from "./adapters/cloudflare-jev.ts";
 // adapters: port implementations for a local workspace and the TypeSafe SDK
 export { parseComments } from "./adapters/comments.ts";
 export {

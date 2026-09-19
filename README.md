@@ -35,8 +35,9 @@ A common agent flow asks jev-code to find relevant files before editing, check c
    it into small, size-limited pieces, such as one changed block of a file or one failure from a log.
 3. **Exact checks run first.** Plain rules catch things like an added `test.skip`, deleted assertions,
    deleted test files, and lockfile, CI or config changes.
-4. **Jev answers fixed-choice questions about each piece.** Using your Jev credential (TypeSafe API key, or
-   an AI Gateway key with `JEV_PROVIDER=vercel`), jev-code asks
+4. **Jev answers fixed-choice questions about each piece.** Using your Jev credential (TypeSafe API key,
+   an AI Gateway key with `JEV_PROVIDER=vercel`, or Cloudflare account id + API token with
+   `JEV_PROVIDER=cloudflare`), jev-code asks
    [TypeSafe Jev](https://typesafe.ai), a model that answers multiple-choice questions, about one small piece
    at a time. For example: "How closely is this changed block related to the task?" jev-code's own code, not
    the model, turns the answers into flags using fixed thresholds.
@@ -68,8 +69,10 @@ After 0.1.0 is released: `npm install --global jev-code`.
 
 ```sh
 export TYPESAFE_API_KEY="<your TypeSafe API key>"    # default provider (or see Jev providers
-                                                     # for the Vercel AI Gateway alternative)
+                                                     # for the Vercel/Cloudflare alternatives)
 export AI_GATEWAY_API_KEY="<your gateway key>"       # JEV_PROVIDER=vercel
+export CLOUDFLARE_ACCOUNT_ID="<your account id>"     # JEV_PROVIDER=cloudflare
+export CLOUDFLARE_API_TOKEN="<your API token>"       # JEV_PROVIDER=cloudflare
 ```
 
 **Example.** An agent was asked to fix a crash. It did, but it also skipped the test and removed an assertion.
@@ -175,7 +178,7 @@ There is no `pass` or `approved` result. Run `jev-code --help` for exit-code mea
 
 By default, run records are saved under `.jev-code/runs/<run-id>/`. They can contain code and log lines, so they are private to your user and ignored by Git. Use `--no-persist` to disable them.
 
-jev-code first sends TypeSafe the redacted request, input shape, diff presence, available capabilities and option names for routing. The selected workflow then sends only the task and bounded evidence it needs, such as changed blocks or short failure-log sections. Obvious secret files and common token formats are filtered on a best-effort basis, but jev-code is not a secret scanner. With the default provider, requests go to TypeSafe; with `JEV_PROVIDER=vercel`, requests additionally pass through the Vercel AI Gateway, which processes them even under zero-data-retention routing. Review both the gateway's and the upstream provider's data terms before sending private or regulated code.
+jev-code first sends TypeSafe the redacted request, input shape, diff presence, available capabilities and option names for routing. The selected workflow then sends only the task and bounded evidence it needs, such as changed blocks or short failure-log sections. Obvious secret files and common token formats are filtered on a best-effort basis, but jev-code is not a secret scanner. With the default provider, requests go to TypeSafe; with `JEV_PROVIDER=vercel`, requests additionally pass through the Vercel AI Gateway, which processes them even under zero-data-retention routing; with `JEV_PROVIDER=cloudflare`, requests additionally pass through Cloudflare infrastructure. Review the gateway's or Cloudflare's and the upstream provider's data terms before sending private or regulated code.
 
 jev-code does not replace tests, type checks, linters, security tools, or human review.
 
@@ -194,15 +197,18 @@ npm run check:package   # package manifest and file-list checks used by the rele
 
 `npm run smoke:real` makes a few real TypeSafe Jev requests after `npm run build`; it skips itself
 without `TYPESAFE_API_KEY`. `npm run smoke:vercel` performs one minimal real Jev evaluation through
-the Vercel AI Gateway; it requires `JEV_SMOKE=1` and `AI_GATEWAY_API_KEY` and skips itself otherwise,
-so neither live test is part of `npm run check`. See [docs/architecture.md](docs/architecture.md) for how the code is organized and
+the Vercel AI Gateway; it requires `JEV_SMOKE=1` and `AI_GATEWAY_API_KEY` and skips itself otherwise.
+`npm run smoke:cloudflare` performs one minimal real Jev evaluation through Cloudflare Workers AI;
+it requires `JEV_SMOKE=1`, `CLOUDFLARE_ACCOUNT_ID`, and a Cloudflare API token
+(`CLOUDFLARE_API_TOKEN` or `JEV_CLOUDFLARE_API_TOKEN`) and skips itself otherwise, so no live test
+is part of `npm run check`. See [docs/architecture.md](docs/architecture.md) for how the code is organized and
 [docs/RELEASING.md](docs/RELEASING.md) for how releases are published.
 
 ## Jev providers
 
-Jev inference is pluggable. Both providers expose the same Jev/System One capability to the review
+Jev inference is pluggable. All providers expose the same Jev/System One capability to the review
 engine through the same request/response schema, so workflows and reports are provider-independent.
-The providers are different services, though: when the gateway does not report TypeSafe's separate
+The providers are different services, though: when a proxy does not report TypeSafe's separate
 confidence statistic, confidence is synthesized from the distribution and threshold-gated decisions
 can differ from TypeSafe-direct (see below). Selection is entirely through configuration, at start:
 
@@ -218,6 +224,21 @@ export JEV_PROVIDER=vercel          # Vercel AI Gateway hosting of Jev
 export AI_GATEWAY_API_KEY="<key>"   # canonical variable read by the ai package
 ```
 
+or
+
+```sh
+export JEV_PROVIDER=cloudflare      # Cloudflare Workers AI hosting of Jev
+export CLOUDFLARE_ACCOUNT_ID="<your Cloudflare account id>"
+export CLOUDFLARE_API_TOKEN="<your Cloudflare API token>"
+# JEV_CLOUDFLARE_API_TOKEN may be used as an application-specific alias for the
+# token; when both are set, the alias wins.
+
+jev-code \
+  "Check the current changes against the user's task" \
+  --task-file task.md \
+  --json
+```
+
 An invalid `JEV_PROVIDER` name fails immediately at startup (exit 64), not halfway through a review.
 
 **Model selection.** `--model` / `TYPESAFE_MODEL` select the TypeSafe-direct model for the default
@@ -225,24 +246,33 @@ provider. The Vercel provider runs in the gateway's model namespace: TypeSafe-di
 (`jev-1.13.0`) are a different namespace and are never forwarded — an unqualified id falls back to
 the configured gateway model, and a slash-qualified gateway id (`typesafe-ai/jev-preview`) is
 honored. The gateway model itself is configured with `JEV_GATEWAY_MODEL` (default `typesafe-ai/jev`,
-the canonical Jev id on the Vercel AI Gateway).
+the canonical Jev id on the Vercel AI Gateway). The Cloudflare provider likewise runs in Cloudflare's
+own model namespace, which currently exposes Jev through the always-current alias `typesafe/jev`
+rather than TypeSafe's pinned versions: unqualified ids are never forwarded, and only
+`typesafe/`-qualified ids pass through. The alias is configurable with `JEV_CLOUDFLARE_MODEL`
+(default `typesafe/jev`).
 
 **Zero data retention.** Evaluations can contain repository source code and diffs, so the Vercel
 provider routes only to providers with zero data retention agreements
 (`providerOptions.gateway.zeroDataRetention = true`) by default. Set
-`JEV_GATEWAY_ZERO_DATA_RETENTION=0` only for troubleshooting.
+`JEV_GATEWAY_ZERO_DATA_RETENTION=0` only for troubleshooting. The Cloudflare provider has no
+equivalent routing flag: requests pass through Cloudflare infrastructure, and jev-code makes no
+data-retention claim for that path — review Cloudflare's and TypeSafe's data/privacy terms before
+sending private source code.
 
 Differences worth knowing:
 
-- TypeSafe's separate per-question confidence statistic is preserved from the gateway response
-  (`providerMetadata.typesafe.confidence`, Choice/Score questions). When that metadata is genuinely
-  unavailable, the provider falls back to a value derived from the reported distribution (the mass
-  of the selected choice, or the maximum level mass for score) — an approximation, not the model's
-  own confidence, so threshold-gated decisions can differ from TypeSafe-direct in that case.
+- TypeSafe's separate per-question confidence statistic is preserved from gateway responses
+  (`providerMetadata.typesafe.confidence`, Choice/Score questions) and from Cloudflare's native Jev
+  answers (`confidence`). When that statistic is genuinely unavailable, the provider falls back to a
+  value derived from the reported distribution (the mass of the selected choice, or the maximum
+  level mass for score) — an approximation, not the model's own confidence, so threshold-gated
+  decisions can differ from TypeSafe-direct in that case.
 - Noul/boolean answers carry probability only; TypeSafe reports no separate confidence for them.
-- Usage numbers come from the gateway; when it omits them, input usage is reported as a conservative
-  estimate of the request size (the same estimate the input-token budget reserves), and output usage
-  as zero.
+  Cloudflare speaks Jev's native contract, so unlike Vercel it needs no boolean translation.
+- Usage numbers come from the gateway or from Cloudflare; when they are omitted, input usage is
+  reported as a conservative estimate of the request size (the same estimate the input-token budget
+  reserves), and output usage as zero.
 
 ## TypeSafe
 

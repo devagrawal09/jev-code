@@ -96,7 +96,13 @@ export function redactJson<T extends JsonValue>(
 /** Credential values present in this process that must never leave it. */
 export function envSecrets(env: NodeJS.ProcessEnv = process.env): string[] {
   const values: string[] = [];
-  for (const name of ["TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY", "COPILOT_MCP_TYPESAFE_API_KEY"]) {
+  for (const name of [
+    "TYPESAFE_API_KEY",
+    "AI_GATEWAY_API_KEY",
+    "CLOUDFLARE_API_TOKEN",
+    "JEV_CLOUDFLARE_API_TOKEN",
+    "COPILOT_MCP_TYPESAFE_API_KEY",
+  ]) {
     const value = env[name];
     if (value && value.trim().length >= 8) values.push(value.trim());
   }
