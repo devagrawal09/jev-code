@@ -4,7 +4,6 @@ import type { JevPort, TransportFailure } from "../core/types.ts";
 import type {
   ArtifactStore,
   EvidenceParser,
-  RedactionPort,
   WorkflowDependencies,
   WorkspaceSource,
 } from "../workflows/ports.ts";
@@ -15,7 +14,7 @@ import { classifyError } from "./jev.ts";
 import { parseFailureLog } from "./logs.ts";
 import { readLines, resolveWorkspacePath } from "./paths.ts";
 import { Recorder } from "./recorder.ts";
-import { createRedaction, redactJson, redactText, safeMessage } from "./redact.ts";
+import { createRedaction } from "./redact.ts";
 import { parseTestRecords } from "./test-records.ts";
 
 /** Read-only git and filesystem inputs confined to `root`. */
