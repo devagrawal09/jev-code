@@ -1,12 +1,8 @@
 # Stanley
 
-[![CI](https://github.com/devagrawal09/stanley-code/actions/workflows/ci.yml/badge.svg)](https://github.com/devagrawal09/stanley-code/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/stanley-code)](https://www.npmjs.com/package/stanley-code)
-[![license: MIT](https://img.shields.io/npm/l/stanley-code)](LICENSE)
-
 **A Jev-first, self-improving coding agent.**
 
-Stanley is a command-line agent that coding agents and people delegate work to. Instead of naming a command,
+Stanley is a command-line tool for checking and understanding code changes. Instead of naming a command,
 you describe what you need. [TypeSafe Jev](https://typesafe.ai) routes the request to one workflow: a built-in,
 a trusted repository plugin, or a workflow Stanley wrote for itself. Each workflow is deterministic code that
 gathers bounded evidence and asks Jev small fixed-choice questions about it; code, not a model, makes the
@@ -18,50 +14,6 @@ it, and then, in the background, asks an agent to write a Stanley workflow for t
 candidate is validated and staged; you promote it, and the next such request runs without any agent.
 
 Stanley was previously published as the `jev-code` placeholder package; see [docs/decision-log.md](docs/decision-log.md).
-
-## What agents can delegate
-
-| Request | What it does |
-| --- | --- |
-| Find relevant code | Rank files that may be relevant to a task. |
-| Check current changes | Check a diff against its task, and optionally against project rules and acceptance criteria. |
-| Review current changes | Look for concrete correctness, error-handling, state, concurrency, and data-integrity risks. |
-| Find test gaps | Identify changed behavior that lacks visible test evidence. |
-| Summarize current changes | Classify each changed block by purpose and centrality. |
-| Review security | Look for concrete security regressions in changed code. |
-| Review performance | Look for concrete scaling, I/O, blocking, memory, cache, and batching regressions. |
-| Review compatibility | Look for breaking source, behavior, data, wire-format, and configuration changes. |
-| Triage test failures | Sort failures from a supplied test or CI log. |
-| Triage review comments | Sort supplied review comments and show which need attention. |
-
-These ten bounded workflows are the built-in capability surface. Trusted plugins under `.stanley/plugins/`,
-including workflows Stanley drafted and you promoted, extend it. Anything else is delegated to the Pi coding
-agent when it is installed. Workflows are not CLI subcommands: every invocation starts with a natural-language
-request.
-
-> **Experimental:** Stanley is a new product. Every request, report, and interface may change.
-
-A common agent flow asks Stanley to find relevant files before editing, check or review changes before calling the work done, and triage failures or review comments when they arrive.
-
-## How a request is handled
-
-1. **The request is routed across available workflows.** Jev chooses one built-in or repository plugin from
-   author-provided JSON routing metadata. The router also sees deterministic facts such as whether a diff exists
-   and whether supplied input is a recognized failure log or review-comment JSON. A request that no workflow
-   supports goes to the [agent fallback](#agent-fallback-and-self-improvement); an uncertain one gets a
-   clarification with `status: "unsupported"`.
-2. **A selected built-in gathers small pieces of evidence.** It reads your Git diff (or a test log you supplied)
-   and splits it into small, size-limited pieces. A selected plugin runs its own trusted implementation instead.
-3. **Built-in code selects and checks evidence.** Deterministic policy prioritizes relevant hunks for bounded
-   analyses. The task checker also catches exact signals such as an added `test.skip`, deleted assertions,
-   deleted test files, and lockfile, CI or config changes.
-4. **For built-ins, Jev answers fixed-choice questions about each piece.** Using your required TypeSafe API key,
-   Stanley asks [TypeSafe Jev](https://typesafe.ai), a model that answers multiple-choice questions, about one
-   small piece at a time. For example: "How closely is this changed block related to the task?" Stanley's own
-   code, not the model, turns the answers into flags using fixed thresholds.
-5. **You get a workflow-neutral result.** Built-in output contains readable `text` and structured `data`; each
-   flag points to a file and line range, and the report lists what was **not checked**. Plugin output is the text
-   or JSON returned by the plugin. Workflow identities remain internal.
 
 ## Get started
 
@@ -91,7 +43,7 @@ After 0.1.0 is released: `npm install --global stanley-code`.
 export TYPESAFE_API_KEY="<your TypeSafe API key>"
 ```
 
-**Example.** An agent was asked to fix a crash. It did, but it also skipped the test and removed an assertion.
+**Example.** A change intended to fix a crash also skipped a test and removed an assertion.
 Inside that repository:
 
 ```sh
@@ -102,6 +54,113 @@ The report points to the skipped test and removed assertion. Jev also checks whe
 to the task and whether a test expectation became weaker.
 
 Read both `output.data.findings` and `output.data.notChecked`. An empty findings list is **not** an approval.
+
+## What Stanley can do
+
+| Request                   | What it does                                                                                 |
+| ------------------------- | -------------------------------------------------------------------------------------------- |
+| Find relevant code        | Rank files that may be relevant to a task.                                                   |
+| Check current changes     | Check a diff against its task, and optionally against project rules and acceptance criteria. |
+| Review current changes    | Look for concrete correctness, error-handling, state, concurrency, and data-integrity risks. |
+| Find test gaps            | Identify changed behavior that lacks visible test evidence.                                  |
+| Summarize current changes | Classify each changed block by purpose and centrality.                                       |
+| Review security           | Look for concrete security regressions in changed code.                                      |
+| Review performance        | Look for concrete scaling, I/O, blocking, memory, cache, and batching regressions.           |
+| Review compatibility      | Look for breaking source, behavior, data, wire-format, and configuration changes.            |
+| Triage test failures      | Sort failures from a supplied test or CI log.                                                |
+| Triage review comments    | Sort supplied review comments and show which need attention.                                 |
+
+These ten bounded workflows are the built-in capability surface. Trusted plugins under `.stanley/plugins/`,
+including workflows Stanley drafted and you promoted, extend it. Anything else is delegated to the Pi coding
+agent when it is installed. Workflows are not CLI subcommands: every invocation starts with a natural-language
+request.
+
+> **Experimental:** Stanley is a new product. Every request, report, and interface may change.
+
+## How a request is handled
+
+1. **The request is routed across available workflows.** Jev chooses one built-in or repository plugin from
+   author-provided JSON routing metadata. The router also sees deterministic facts such as whether a diff exists
+   and whether supplied input is a recognized failure log or review-comment JSON. A request that no workflow
+   supports goes to the [agent fallback](#agent-fallback-and-self-improvement); an uncertain one gets a
+   clarification with `status: "unsupported"`.
+2. **A selected built-in gathers small pieces of evidence.** It reads your Git diff (or a test log you supplied)
+   and splits it into small, size-limited pieces. A selected plugin runs its own trusted implementation instead.
+3. **Built-in code selects and checks evidence.** Deterministic policy prioritizes relevant hunks for bounded
+   analyses. The task checker also catches exact signals such as an added `test.skip`, deleted assertions,
+   deleted test files, and lockfile, CI or config changes.
+4. **For built-ins, Jev answers fixed-choice questions about each piece.** Using your required TypeSafe API key,
+   Stanley asks [TypeSafe Jev](https://typesafe.ai), a model that answers multiple-choice questions, about one
+   small piece at a time. For example: "How closely is this changed block related to the task?" Stanley's own
+   code, not the model, turns the answers into flags using fixed thresholds.
+5. **You get a workflow-neutral result.** Built-in output contains readable `text` and structured `data`; each
+   flag points to a file and line range, and the report lists what was **not checked**. Plugin output is the text
+   or JSON returned by the plugin. Workflow identities remain internal.
+
+### How requests flow
+
+**Routing.** Deterministic facts gate which workflows are eligible before Jev picks one. Low confidence, a
+narrow margin, or an unavailable pick all end in `cannot_tell` rather than a guess.
+
+```mermaid
+flowchart TD
+  R["Natural-language request"] --> F["Deterministic facts: diff present? input is a failure log,<br/>review-comment JSON, or other? which options were passed?"]
+  F --> G{"Capability gates"}
+  G -->|"always"| A1["find"]
+  G -->|"diff present"| A2["check, review, test_gaps, summarize,<br/>security, performance, compatibility"]
+  G -->|"failure log input"| A3["triage_failures"]
+  G -->|"comment JSON input"| A4["triage_comments"]
+  G -->|"loaded plugins"| A5["trusted repository plugins"]
+  A1 & A2 & A3 & A4 & A5 --> J["One Jev choice over each workflow's routing metadata,<br/>plus cannot_tell"]
+  J --> T{"Confidence ≥ 0.6, probability ≥ 0.55,<br/>margin ≥ 0.15, and pick is available?"}
+  T -->|"yes"| W["Run the selected workflow"]
+  T -->|"no, or cannot_tell"| U["No workflow runs: clarification with<br/>status unsupported, or the fallback below"]
+```
+
+**Check and review.** Both read the diff once and split it into hunks. `check` always runs the task section and
+adds rules and criteria sections only when you supply them. `review` and the other diff analyses classify hunks
+without a task.
+
+```mermaid
+flowchart TD
+  D["Load diff (--scope worktree | staged | branch --base)"] --> H["Split into hunks; exclude generated or unreadable files"]
+  H --> K{"Which workflow?"}
+  K -->|"check"| TS["Task section, always: exact signals first<br/>(test.skip, deleted assertions or tests, lockfile/CI/config edits)"]
+  TS --> TJ["Jev: is each hunk related to the task?<br/>Did a test expectation weaken?<br/>(first 150 hunks by default, --max-hunks)"]
+  K -->|"check"| RS["Rules section, only with --rules:<br/>semantic rules vs matching hunks"]
+  K -->|"check"| CS["Criteria section, only with --criteria:<br/>code or test evidence per criterion,<br/>--test-results adds evidence"]
+  K -->|"review, test gaps, summarize,<br/>security, performance, compatibility"| AN["Deterministic priority picks hunks (--max-hunks);<br/>Jev classifies each against a fixed taxonomy"]
+  TJ & RS & CS & AN --> P["Code applies thresholds and combines probabilities"]
+  P --> O["findings, parked, limits, notChecked<br/>(empty findings is not approval)"]
+```
+
+**Find relevant code.**
+
+```mermaid
+flowchart TD
+  I["Tracked files, optionally limited by --paths"] --> L["Lexical scoring against the task;<br/>only the top --max-files (3000) are screened"]
+  L --> S["Round 1: shuffled shards of 20 files,<br/>Jev screens path and metadata"]
+  S --> X{"Accepted as possibly relevant?"}
+  X -->|"no"| N["Reported unjudged or not relevant"]
+  X -->|"yes"| E["Round 2: read a bounded excerpt;<br/>read one more region if relevant content was cut off"]
+  E --> Q["Jev scores relevance"]
+  Q --> RK["Rank and return the top N files (default 10, max 50)"]
+```
+
+**Triage failures or review comments.** Input comes from `--input` or stdin. Both kinds share one run, and the
+diff is optional context (`--no-diff` turns it off). Nothing is rerun, replied to, or resolved.
+
+```mermaid
+flowchart TD
+  IN["--input or stdin"] --> SH{"Recognized shape"}
+  SH -->|"test or CI log"| FB["Split into failure blocks and group duplicates<br/>(up to 40 judged)"]
+  SH -->|"review-comment JSON"| CT["Parse comment threads<br/>(up to 100 judged)"]
+  DF["Current diff, unless --no-diff"] -.-> FJ
+  DF -.-> CJ
+  FB --> FJ["Jev relates each failure to the diff and repository:<br/>caused by diff, unrelated, or environment/infrastructure;<br/>proposes a rerun that would settle it"]
+  CT --> CJ["Jev compares each comment with the current code:<br/>actionable, already addressed, stale,<br/>unclear, or non-actionable"]
+  FJ & CJ --> TR["Code applies thresholds; results all share one kind"]
+```
 
 ## The workflows
 
@@ -123,7 +182,7 @@ stanley "Check this branch against its requirements" --task-file task.md --scope
 
 The check workflow reads the diff once and everything lands in one report. Each row in `output.data.results` has a
 `section` field (`task`, `rules` or `criteria`), and `output.data.summary.sections` lists the sections that ran.
-Give it the task as the person wrote it, not the agent's summary of what it did.
+Give it the task as the person wrote it, not a summary of what changed.
 
 A rules file looks like this. Only `semantic` rules are judged; `deterministic` and `process` rules are
 listed as not checked, because linters and people handle those better.
@@ -132,7 +191,12 @@ listed as not checked, because linters and people handle those better.
 {
   "version": 1,
   "rules": [
-    { "id": "no-client-keys", "class": "semantic", "text": "API keys are never read in client code.", "scope": ["src/client/**"] }
+    {
+      "id": "no-client-keys",
+      "class": "semantic",
+      "text": "API keys are never read in client code.",
+      "scope": ["src/client/**"]
+    }
   ]
 }
 ```
@@ -196,17 +260,27 @@ export default async ({ root, signal, log }) => ({
   instructions: "Use when the user requests release notes or a changelog.",
   examples: ["Prepare release notes for this change"],
   async run({ request, input, prompt, judge }) {
-    log.info("preparing release notes")
-    const summary = await prompt("Summarize the current diff")
+    log.info("preparing release notes");
+    const summary = await prompt("Summarize the current diff");
     const tone = await judge({
       scope: "release-notes",
       state: { request, summary: summary.output },
-      questions: { audience: { type: "choice", criteria: { users: "end users", developers: "contributors" } } },
-    })
-    return { request, input: input ?? null, summary: summary.output, tone: tone.ok ? tone.answers.audience : null }
+      questions: {
+        audience: {
+          type: "choice",
+          criteria: { users: "end users", developers: "contributors" },
+        },
+      },
+    });
+    return {
+      request,
+      input: input ?? null,
+      summary: summary.output,
+      tone: tone.ok ? tone.answers.audience : null,
+    };
   },
   async cleanup() {},
-})
+});
 ```
 
 Only `id` and `run` are required. Every other enumerable field except `cleanup` must be JSON; a redacted copy is
@@ -271,26 +345,9 @@ record to retry); `improvements/worker.log` is the worker diary. `STANLEY_PI_BIN
 binary and `STANLEY_AGENT_MODEL` selects a Pi model. Delegation and the worker run with the same privileges and
 environment as you, including `TYPESAFE_API_KEY`.
 
-## Using it from a coding agent
-
-Stanley is a CLI with JSON output. It ships no editor or agent hook. Copy this into your agent instructions
-(for example `AGENTS.md` or `CLAUDE.md`):
-
-```text
-Before you say a coding task is done:
-1. Run the project's normal tests, type checks and linters yourself. Built-in Stanley workflows do not run them.
-2. Run: stanley "Check the current changes against the user's task" --task "<the user's original task, word for word>" --task-source user --json
-   Add --rules <file> and --criteria-file <file> if the project has them.
-3. Optional: if a test run failed, save its output to a file in the repository and run:
-   stanley "Triage these test failures" --input <that file> --json
-4. Read every item in "output.data.findings", "output.data.parked" and "output.data.notChecked". Fix the code, or tell the user why each one is fine.
-5. Exit 10 means incomplete coverage, 12 means budget exhaustion, and 64 means an unsupported request or invalid invocation. No findings does not mean the change is approved. Never say Stanley passed it.
-6. If "output.data.handledBy" is "coding_agent", an external agent did the work and nothing verified it: run the tests and review the diff yourself.
-```
-
 ## Reports and privacy
 
-Use `--json` when an agent or script will read the result. Every workflow result uses the
+Use `--json` when a script will read the result. Every workflow result uses the
 `stanley.prompt-result/v1` schema with `status` and `output`. Built-in `output` has readable `text` plus
 structured `data`; its most important fields are:
 
@@ -298,8 +355,8 @@ structured `data`; its most important fields are:
 - `output.data.parked`: items Stanley could not decide
 - `output.data.notChecked`: work Stanley did not perform
 - `output.data.coverage`: how much evidence was actually examined
-Workflow and run identities are intentionally absent from public results. There is no `pass` or `approved`
-result. Run `stanley --help` for exit-code meanings.
+  Workflow and run identities are intentionally absent from public results. There is no `pass` or `approved`
+  result. Run `stanley --help` for exit-code meanings.
 
 By default, built-in workflow records are saved under `.stanley/runs/<run-id>/`. They can contain code and log
 lines, so they are private to your user and ignored by Git. Use `--no-persist` to disable them. Improvement
